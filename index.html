@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- V.4.1-->
 <html lang="fr">
 <head>
   <meta charset="UTF-8"/>
@@ -257,7 +256,22 @@ function SummaryCard({rows,dark}){
   );
 }
 
-// ─── HELPERS BOUTONS NAV ─────────────────────────────────────────────────────
+class SafeView extends React.Component {
+  constructor(props){ super(props); this.state={error:null}; }
+  componentDidCatch(err){ this.setState({error:err.message||String(err)}); }
+  static getDerivedStateFromError(err){ return {error:err.message||String(err)}; }
+  render(){
+    if(this.state.error) return (
+      <div style={{padding:20,color:"#f87171",fontSize:13,background:"#1a0a0a",margin:14,borderRadius:12,border:"1px solid #f87171"}}>
+        <div style={{fontWeight:700,marginBottom:8}}>Erreur vue {this.props.name} :</div>
+        <div style={{fontFamily:"monospace",wordBreak:"break-all"}}>{this.state.error}</div>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+
 const nb = dark=>({...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"});
 
 // ─── Calcul ajustements (nouveau format tableau) ──────────────────────────────
@@ -796,8 +810,8 @@ function Badgeo(){
 
       <div style={S.body}>
         {view==="semaine"&&<VueSemaine cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay}/>}
-        {view==="mois"&&<VueMois cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay} adjustments={adjustments} setAdjustments={setAdjustments} saveAll={saveAll}/>}
-        {view==="annee"&&<VueAnnee cur={cur} setCur={setCur} data={data} settings={settings} setCurAndView={setCurAndView} adjustments={adjustments}/>}
+        {view==="mois"&&<SafeView name="Mois"><VueMois cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay} adjustments={adjustments} setAdjustments={setAdjustments} saveAll={saveAll}/></SafeView>}
+        {view==="annee"&&<SafeView name="Année"><VueAnnee cur={cur} setCur={setCur} data={data} settings={settings} setCurAndView={setCurAndView} adjustments={adjustments}/></SafeView>}
         {view==="settings"&&<VueSettings settings={settings} updateSettings={updateSettings} exportCSV={exportCSV} exportPDF={exportPDF} exportJSON={exportJSON} importJSON={importJSON} resetData={resetData} showToast={showToast}/>}
       </div>
 
