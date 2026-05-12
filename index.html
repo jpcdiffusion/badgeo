@@ -10,9 +10,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#0c0c14;color:#e8e6f0;font-family:'DM Sans','Segoe UI',sans-serif}
+    body{background:#0c0c14;color:#e8e6f0;font-family:'DM Sans','Segoe UI',sans-serif;transition:background .3s,color .3s}
     input[type=time],input[type=text],input[type=number]{color-scheme:dark}
-    .light body{background:#f4f4f8;color:#1a1a2e}
+    .light input[type=time],.light input[type=text],.light input[type=number]{color-scheme:light}
+    select{appearance:none}
   </style>
 </head>
 <body>
@@ -20,131 +21,133 @@
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
 
-const JOURS_FULL_FR = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
+const JOURS_FULL = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
 const MOIS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const TYPE_SPECIAL = { repos:"Repos", ferie:"Férié" };
-const PRESETS = {
-  matinsoir:   { p1: "Matin", p2: "Soir" },
-  matinapm:    { p1: "Matin", p2: "Après-midi" },
-};
+const PRESETS = { matinsoir:{p1:"Matin",p2:"Soir"}, matinapm:{p1:"Matin",p2:"Après-midi"} };
+const ROUND_OPTS = [{v:0,l:"Aucun"},{v:5,l:"5 min"},{v:10,l:"10 min"},{v:15,l:"15 min"}];
 
-// ─── UTILITAIRES ─────────────────────────────────────────────────────────────
-function dateKey(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
-function parseKey(k){ const [y,m,d]=k.split("-").map(Number); return new Date(y,m-1,d); }
-function minutesToHM(min){ if(min<0) return `-${minutesToHM(-min)}`; const h=Math.floor(min/60),m=min%60; return `${h}h${String(m).padStart(2,"0")}`; }
-function hmToMinutes(hm){ if(!hm) return null; const p=hm.split(":"); return (parseInt(p[0])||0)*60+(parseInt(p[1])||0); }
-function displayHeure(hm){ if(!hm) return "—"; const h=parseInt(hm.split(":")[0]),m=hm.split(":")[1]; if(h>=24) return `${String(h-24).padStart(2,"0")}:${m}†`; return hm; }
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+const dk = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const pk = k => { const [y,m,d]=k.split("-").map(Number); return new Date(y,m-1,d); };
+const hm2min = hm => { if(!hm) return null; const p=hm.split(":"); return (parseInt(p[0])||0)*60+(parseInt(p[1])||0); };
+const min2hm = min => { if(min===null||min===undefined) return ""; const h=Math.floor(Math.abs(min)/60),m=Math.abs(min)%60; return `${min<0?"-":""}${h}h${String(m).padStart(2,"0")}`; };
+const dispH = hm => { if(!hm) return "—"; const h=parseInt(hm.split(":")[0]),m=hm.split(":")[1]; return h>=24?`${String(h-24).padStart(2,"0")}:${m}†`:hm; };
+const roundMin = (min, r) => r>0 ? Math.round(min/r)*r : min;
+const nowHHMM = (r=0) => { const n=new Date(),total=roundMin(n.getHours()*60+n.getMinutes(),r); const h=Math.floor(total/60)%24,m=total%60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`; };
 
-function getWeekStart(d, firstDay=1){
-  const dt=new Date(d), day=dt.getDay();
-  const diff=((day - firstDay)+7)%7;
-  dt.setDate(dt.getDate()-diff); dt.setHours(0,0,0,0); return dt;
-}
-function getSemaineDays(ref, firstDay=1){
-  const ws=getWeekStart(ref,firstDay);
-  return Array.from({length:7},(_,i)=>{ const d=new Date(ws); d.setDate(ws.getDate()+i); return d; });
-}
-function getJourNom(d, firstDay=1){
-  // index dans JOURS_FULL_FR: lundi=0..dimanche=6
-  return JOURS_FULL_FR[(d.getDay()+6)%7];
-}
-function getJourCourt(d){
-  return JOURS_FULL_FR[(d.getDay()+6)%7].slice(0,3);
-}
+function wkStart(d, fd=1){ const dt=new Date(d),day=dt.getDay(),diff=((day-fd)+7)%7; dt.setDate(dt.getDate()-diff); dt.setHours(0,0,0,0); return dt; }
+function wkDays(ref, fd=1){ const ws=wkStart(ref,fd); return Array.from({length:7},(_,i)=>{ const d=new Date(ws); d.setDate(ws.getDate()+i); return d; }); }
+function jourCourt(d){ return JOURS_FULL[(d.getDay()+6)%7].slice(0,3); }
+function jourNom(d){ return JOURS_FULL[(d.getDay()+6)%7]; }
 
-function calcJour(entry, singlePeriod=false){
-  if(!entry||entry.special) return 0;
-  let t=0;
-  const md=hmToMinutes(entry.matin_debut), mf=hmToMinutes(entry.matin_fin);
-  if(md!==null&&mf!==null&&mf>md) t+=mf-md;
-  if(singlePeriod||entry.singlePeriod) return t;
-  const sd=hmToMinutes(entry.soir_debut); let sf=hmToMinutes(entry.soir_fin);
-  if(sd!==null&&sf!==null){ if(sf<sd) sf+=24*60; if(sf>sd) t+=sf-sd; }
-  return t;
-}
+function calcPause(e){ if(!e) return 0; const s=hm2min(e.pause_debut),f=hm2min(e.pause_fin); if(s===null||f===null) return 0; let d=f-s; if(d<0) d+=24*60; return Math.max(0,d); }
+function calcJour(e){ if(!e||e.special) return 0; let t=0; const md=hm2min(e.matin_debut),mf=hm2min(e.matin_fin); if(md!==null&&mf!==null&&mf>md) t+=mf-md; if(!e.singlePeriod){ const sd=hm2min(e.soir_debut); let sf=hm2min(e.soir_fin); if(sd!==null&&sf!==null){ if(sf<sd) sf+=24*60; if(sf>sd) t+=sf-sd; } } return Math.max(0,t-calcPause(e)); }
 
-function nextCreneauIndex(entry, singlePeriod=false){
-  const useSingle = singlePeriod || (entry&&entry.singlePeriod);
-  const fields = useSingle ? ["matin_debut","matin_fin"] : ["matin_debut","matin_fin","soir_debut","soir_fin"];
-  if(!entry) return 0;
-  for(let i=0;i<fields.length;i++){ if(!entry[fields[i]]) return i; }
-  return -1;
-}
+// Champs de pointage dans l'ordre
+function getFields(single){ return single ? ["matin_debut","matin_fin","pause_debut","pause_fin"] : ["matin_debut","matin_fin","pause_debut","pause_fin","soir_debut","soir_fin"]; }
+function nextFieldIdx(e, single){ const fields=getFields(single||e?.singlePeriod); if(!e) return 0; for(let i=0;i<fields.length;i++) if(!e[fields[i]]) return i; return -1; }
 
-const CRENEAUX_DEF = [
-  { field:"matin_debut", slot:0 },
-  { field:"matin_fin",   slot:1 },
-  { field:"soir_debut",  slot:2 },
-  { field:"soir_fin",    slot:3 },
-];
-const ICONS = ["🌅","☀️","🌆","🌙"];
-const COLORS = ["#4ade80","#facc15","#60a5fa","#c4b8ff"];
-
-function getCraneaux(labels){
-  return [
-    { label:`Arrivée ${labels.p1}`,  field:"matin_debut", icon:ICONS[0], color:COLORS[0] },
-    { label:`Départ ${labels.p1}`,   field:"matin_fin",   icon:ICONS[1], color:COLORS[1] },
-    { label:`Arrivée ${labels.p2}`,  field:"soir_debut",  icon:ICONS[2], color:COLORS[2] },
-    { label:`Départ ${labels.p2}`,   field:"soir_fin",    icon:ICONS[3], color:COLORS[3] },
+function getCreneaux(labels, single){
+  const all = [
+    {label:`Arrivée ${single?"":""}${single?"":(labels.p1||"Matin")}`,  shortLabel:"Arrivée", field:"matin_debut", icon:"🌅", color:"#4ade80"},
+    {label:`Départ ${single?"":""}${single?"":(labels.p1||"Matin")}`,   shortLabel:"Départ",  field:"matin_fin",   icon:"☀️",  color:"#facc15"},
+    {label:"Début pause",   field:"pause_debut",  icon:"☕", color:"#fb923c"},
+    {label:"Fin pause",     field:"pause_fin",    icon:"▶️",  color:"#a3e635"},
+    {label:`Arrivée ${labels.p2||"Après-midi"}`, field:"soir_debut",  icon:"🌆", color:"#60a5fa"},
+    {label:`Départ ${labels.p2||"Après-midi"}`,  field:"soir_fin",    icon:"🌙", color:"#c4b8ff"},
   ];
+  if(single){
+    all[0].label="Arrivée"; all[1].label="Départ";
+  }
+  return single ? all.slice(0,4) : all;
 }
 
 // ─── MODAL JOUR ──────────────────────────────────────────────────────────────
-function DayEditor({dk, data, settings, onSave, onDelete, onClose}){
-  const d=parseKey(dk), jourNom=getJourNom(d);
-  const labels = PRESETS[settings.preset]||PRESETS.matinapm;
-  const [local,setLocal]=useState({...(data[dk]||{})});
-  const setSpecial=type=>setLocal(prev=>prev.special===type?{}:{special:type});
-  const upd=(field,val)=>setLocal(prev=>{ const n={...prev,special:undefined}; if(val) n[field]=val; else delete n[field]; return n; });
-  const toggleSingle=()=>setLocal(prev=>({...prev,singlePeriod:!prev.singlePeriod,soir_debut:undefined,soir_fin:undefined}));
-  const handleSave=()=>{ const c={...local}; Object.keys(c).forEach(k=>{if(c[k]===undefined||c[k]==="")delete c[k]}); onSave(dk,c); onClose(); };
-  const total=calcJour(local);
+function DayEditor({dkey,data,settings,onSave,onDelete,onClose}){
+  const d=pk(dkey), labels=PRESETS[settings.preset]||PRESETS.matinapm;
+  const [loc,setLoc]=useState({...(data[dkey]||{})});
   const dark=settings.theme!=="light";
+  const single=!!loc.singlePeriod;
+  const pause=calcPause(loc), total=calcJour(loc);
+
+  const setSpecial=t=>setLoc(p=>p.special===t?{}:{special:t});
+  const upd=(f,v)=>setLoc(p=>{ const n={...p,special:undefined}; v?n[f]=v:delete n[f]; return n; });
+  const toggleSingle=()=>setLoc(p=>({...p,singlePeriod:!p.singlePeriod,soir_debut:undefined,soir_fin:undefined}));
+  const handleSave=()=>{ const c={...loc}; Object.keys(c).forEach(k=>{if(c[k]===undefined||c[k]==="")delete c[k]}); onSave(dkey,c); onClose(); };
+
+  const bg=dark?"#14142a":"#fff", fg=dark?"#e8e6f0":"#1a1a2e", sub=dark?"#8b86aa":"#888";
+  const inputS={...S.tInput, background:dark?"#0c0c14":"#f7f7fb", color:fg, border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
 
   return (
     <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{...S.modal, background:dark?"#14142a":"#ffffff", color:dark?"#e8e6f0":"#1a1a2e"}}>
+      <div style={{...S.modal,background:bg,color:fg}}>
         <div style={S.modalHeader}>
-          <div><div style={S.modalDay}>{jourNom}</div><div style={{...S.modalDate,color:dark?"#8b86aa":"#888"}}>{d.getDate()} {MOIS[d.getMonth()]} {d.getFullYear()}</div></div>
-          <button style={{...S.closeBtn,color:dark?"#8b86aa":"#888"}} onClick={onClose}>✕</button>
+          <div>
+            <div style={{...S.modalDay,color:fg}}>{jourNom(d)}</div>
+            <div style={{...S.modalDate,color:sub}}>{d.getDate()} {MOIS[d.getMonth()]} {d.getFullYear()}</div>
+          </div>
+          <button style={{...S.closeBtn,color:sub}} onClick={onClose}>✕</button>
         </div>
 
+        {/* Spéciaux */}
         <div style={S.specialRow}>
           {Object.entries(TYPE_SPECIAL).map(([k,v])=>(
-            <button key={k} style={{...S.specialBtn,...(local.special===k?S.specialBtnOn:{}), background:dark?(local.special===k?"#221e38":"#1a1a28"):(local.special===k?"#e8e4ff":"#f0f0f6"), color:dark?(local.special===k?"#c4b8ff":"#b0aac8"):(local.special===k?"#6c5ce7":"#555"), border:`1.5px solid ${local.special===k?"#c4b8ff":dark?"#2a2a3a":"#ddd"}`}} onClick={()=>setSpecial(k)}>{v}</button>
+            <button key={k} onClick={()=>setSpecial(k)}
+              style={{...S.specialBtn, background:dark?(loc.special===k?"#221e38":"#1a1a28"):(loc.special===k?"#ede9ff":"#f0f0f8"), color:dark?(loc.special===k?"#c4b8ff":"#b0aac8"):(loc.special===k?"#6c5ce7":"#555"), border:`1.5px solid ${loc.special===k?"#c4b8ff":dark?"#2a2a3a":"#ddd"}`}}>{v}</button>
           ))}
         </div>
 
-        {!local.special&&(<>
+        {!loc.special&&(<>
           {/* Toggle période unique */}
-          <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:13,color:dark?"#b0aac8":"#555",cursor:"pointer"}}>
-            <input type="checkbox" checked={!!local.singlePeriod} onChange={toggleSingle}
-              style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+          <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:13,color:sub,cursor:"pointer"}}>
+            <input type="checkbox" checked={single} onChange={toggleSingle} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
             Journée en une seule période
           </label>
 
-          <div style={S.creneauxGrid}>
-            <div style={{...S.creneauGroup, background:dark?"#1a1a28":"#f7f7fb"}}>
-              <div style={{...S.creneauGroupTitle,color:dark?"#8b86aa":"#999"}}>🌅 {labels.p1}</div>
-              <label style={{...S.lbl,color:dark?"#8b86aa":"#777"}}>Arrivée<input type="time" style={{...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} value={local.matin_debut||""} onChange={e=>upd("matin_debut",e.target.value)}/></label>
-              <label style={{...S.lbl,color:dark?"#8b86aa":"#777"}}>Départ<input type="time" style={{...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} value={local.matin_fin||""} onChange={e=>upd("matin_fin",e.target.value)}/></label>
+          {/* Période 1 */}
+          <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8}}>
+            <div style={{...S.creneauGroupTitle,color:sub}}>🌅 {single?"Journée":labels.p1}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <label style={{...S.lbl,color:sub}}>Arrivée<input type="time" style={inputS} value={loc.matin_debut||""} onChange={e=>upd("matin_debut",e.target.value)}/></label>
+              <label style={{...S.lbl,color:sub}}>Départ<input type="time" style={inputS} value={loc.matin_fin||""} onChange={e=>upd("matin_fin",e.target.value)}/></label>
             </div>
-            {!local.singlePeriod&&(
-              <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb"}}>
-                <div style={{...S.creneauGroupTitle,color:dark?"#8b86aa":"#999"}}>🌆 {labels.p2}</div>
-                <label style={{...S.lbl,color:dark?"#8b86aa":"#777"}}>Arrivée<input type="time" style={{...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} value={local.soir_debut||""} onChange={e=>upd("soir_debut",e.target.value)}/></label>
-                <label style={{...S.lbl,color:dark?"#8b86aa":"#777"}}>
-                  <span>Départ <span style={{fontSize:9,color:"#999"}}>†après minuit: 25:30</span></span>
-                  <input type="text" placeholder="ex: 18:30 ou 25:30" style={{...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} value={local.soir_fin||""} onChange={e=>upd("soir_fin",e.target.value)}/>
+          </div>
+
+          {/* Pause */}
+          <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8,border:`1px solid ${dark?"#2a2040":"#e8e4ff"}`}}>
+            <div style={{...S.creneauGroupTitle,color:"#fb923c"}}>☕ Pause (optionnelle)</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <label style={{...S.lbl,color:sub}}>Début<input type="time" style={inputS} value={loc.pause_debut||""} onChange={e=>upd("pause_debut",e.target.value)}/></label>
+              <label style={{...S.lbl,color:sub}}>Fin<input type="time" style={inputS} value={loc.pause_fin||""} onChange={e=>upd("pause_fin",e.target.value)}/></label>
+            </div>
+            {pause>0&&<div style={{fontSize:11,color:"#fb923c",marginTop:4}}>Déduite : {min2hm(pause)}</div>}
+          </div>
+
+          {/* Période 2 */}
+          {!single&&(
+            <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8}}>
+              <div style={{...S.creneauGroupTitle,color:sub}}>🌆 {labels.p2}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <label style={{...S.lbl,color:sub}}>Arrivée<input type="time" style={inputS} value={loc.soir_debut||""} onChange={e=>upd("soir_debut",e.target.value)}/></label>
+                <label style={{...S.lbl,color:sub}}>
+                  <span>Départ<span style={{fontSize:9,color:"#999",marginLeft:4}}>†=après minuit</span></span>
+                  <input type="text" placeholder="18:30 ou 25:30" style={inputS} value={loc.soir_fin||""} onChange={e=>upd("soir_fin",e.target.value)}/>
                 </label>
               </div>
-            )}
-          </div>
-          {total>0&&<div style={S.totalJour}>Total : <strong>{minutesToHM(total)}</strong></div>}
+            </div>
+          )}
+
+          {total>0&&(
+            <div style={{textAlign:"right",color:"#c4b8ff",fontSize:15,marginBottom:8,fontWeight:700}}>
+              Total net : <strong>{min2hm(total)}</strong>
+              {pause>0&&<span style={{fontSize:11,color:"#fb923c",marginLeft:8}}>(pause {min2hm(pause)} déduite)</span>}
+            </div>
+          )}
         </>)}
 
         <div style={S.modalFooter}>
-          {data[dk]&&<button style={S.deleteBtn} onClick={()=>{onDelete(dk);onClose();}}>Supprimer</button>}
+          {data[dkey]&&<button style={S.deleteBtn} onClick={()=>{onDelete(dkey);onClose();}}>Supprimer</button>}
           <button style={S.saveBtn} onClick={handleSave}>Enregistrer</button>
         </div>
       </div>
@@ -152,274 +155,425 @@ function DayEditor({dk, data, settings, onSave, onDelete, onClose}){
   );
 }
 
-// ─── VUE SEMAINE ─────────────────────────────────────────────────────────────
-function VueSemaine({currentDate,setCurrentDate,data,settings,setEditDay}){
-  const today=new Date(),todayKey=dateKey(today);
-  const days=getSemaineDays(currentDate,settings.firstDay);
-  const total=days.reduce((a,d)=>a+calcJour(data[dateKey(d)]),0);
-  const solde=total-settings.heuresHebdo*60;
-  const ws=days[0],we=days[6];
-  const dark=settings.theme!=="light";
+// ─── MODAL AJUSTEMENT SOLDE ──────────────────────────────────────────────────
+function AjustModal({yearMonth, adjustments, onSave, onClose, dark}){
+  const [adj, setAdj]=useState(adjustments[yearMonth]||{minutes:0,motif:""});
+  const bg=dark?"#14142a":"#fff", fg=dark?"#e8e6f0":"#1a1a2e", sub=dark?"#8b86aa":"#888";
+  const inputS={...S.tInput,background:dark?"#0c0c14":"#f7f7fb",color:fg,border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
+  const [heures, setHeures]=useState(Math.floor(Math.abs(adj.minutes)/60)*(adj.minutes<0?-1:1));
+  const [mins2, setMins2]=useState(Math.abs(adj.minutes)%60);
+  const [signe, setSigne]=useState(adj.minutes<0?"-":"+");
+
+  const total=(Math.abs(heures)*60+Math.abs(mins2))*(signe==="-"?-1:1);
 
   return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setDate(d.getDate()-7);setCurrentDate(d);}}>‹</button>
-        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{ws.getDate()} {MOIS[ws.getMonth()].slice(0,3)} – {we.getDate()} {MOIS[we.getMonth()].slice(0,3)} {we.getFullYear()}</div>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setDate(d.getDate()+7);setCurrentDate(d);}}>›</button>
+    <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{...S.modal,background:bg,color:fg}}>
+        <div style={S.modalHeader}>
+          <div style={{...S.modalDay,color:fg}}>Ajustement solde</div>
+          <button style={{...S.closeBtn,color:sub}} onClick={onClose}>✕</button>
+        </div>
+        <div style={{fontSize:13,color:sub,marginBottom:12}}>Heures sup payées ou récupérées ce mois — déduites du solde cumulé.</div>
+        <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
+          <select value={signe} onChange={e=>setSigne(e.target.value)}
+            style={{...inputS,width:64,textAlign:"center",fontSize:18,fontWeight:700}}>
+            <option value="+">+</option>
+            <option value="-">−</option>
+          </select>
+          <input type="number" min="0" max="999" placeholder="h" style={{...inputS,flex:1}} value={Math.abs(heures)||""} onChange={e=>setHeures(Number(e.target.value))}/>
+          <span style={{color:sub}}>h</span>
+          <input type="number" min="0" max="59" placeholder="min" style={{...inputS,flex:1}} value={mins2||""} onChange={e=>setMins2(Number(e.target.value))}/>
+          <span style={{color:sub}}>min</span>
+        </div>
+        <label style={{...S.lbl,color:sub,marginBottom:16}}>Motif (optionnel)
+          <input type="text" style={inputS} placeholder="ex. Heures sup payées en octobre" value={adj.motif||""} onChange={e=>setAdj(p=>({...p,motif:e.target.value}))}/>
+        </label>
+        {total!==0&&<div style={{textAlign:"center",fontSize:16,fontWeight:700,color:total>0?"#f87171":"#4ade80",marginBottom:12}}>
+          {total>0?"−":"+"}{min2hm(Math.abs(total))} {total>0?"retiré du solde":"ajouté au solde"}
+        </div>}
+        <div style={S.modalFooter}>
+          <button style={{...S.saveBtn,background:"#2a2a3a",color:"#8b86aa"}} onClick={()=>{onSave(yearMonth,{minutes:0,motif:""});onClose();}}>Effacer</button>
+          <button style={S.saveBtn} onClick={()=>{onSave(yearMonth,{minutes:total,motif:adj.motif});onClose();}}>Enregistrer</button>
+        </div>
       </div>
-      <div style={S.daysGrid}>
-        {days.map(d=>{
-          const dk=dateKey(d),entry=data[dk],mins=calcJour(entry),isToday=dk===todayKey,isSpecial=entry?.special;
-          const nxt=nextCreneauIndex(entry,settings.singlePeriodDefault);
-          return (
-            <div key={dk} style={{...S.dayCard,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSpecial?{background:dark?"#1c1616":"#fff5f5"}:{})}} onClick={()=>setEditDay(dk)}>
-              <div style={{...S.dayName,color:dark?"#8b86aa":"#aaa"}}>{getJourCourt(d)}</div>
-              <div style={{...S.dayNum,color:dark?"#f0eeff":"#1a1a2e"}}>{d.getDate()}</div>
-              {isSpecial?<div style={S.specialTag}>{entry.special==="repos"?"R":"F"}</div>:mins>0?<div style={S.dayHours}>{minutesToHM(mins)}</div>:nxt>0&&nxt<(settings.singlePeriodDefault?2:4)?<div style={{...S.dayHours,color:"#facc15"}}>…</div>:<div style={{...S.dayEmpty,color:dark?"#2e2e44":"#ccc"}}>—</div>}
-            </div>
-          );
-        })}
-      </div>
-      <SummaryCard dark={dark} rows={[
-        {label:"Total semaine", value:minutesToHM(total), bold:true},
-        {label:"Forfait", value:`${settings.heuresHebdo}h00`},
-        {label:"Solde semaine", value:(solde>=0?"+":"")+minutesToHM(solde), color:solde>=0?"#4ade80":"#f87171", solde:true},
-      ]}/>
-    </div>
-  );
-}
-
-// ─── VUE MOIS ────────────────────────────────────────────────────────────────
-function VueMois({currentDate,setCurrentDate,data,settings,setEditDay}){
-  const today=new Date(),todayKey=dateKey(today),y=currentDate.getFullYear(),mo=currentDate.getMonth();
-  const total=Object.entries(data).reduce((a,[k,v])=>{const d=parseKey(k);return(d.getFullYear()===y&&d.getMonth()===mo)?a+calcJour(v):a;},0);
-  const dim=new Date(y,mo+1,0).getDate();
-  const sem=Math.ceil((dim+((new Date(y,mo,1).getDay()-settings.firstDay+7)%7))/7);
-  const forfait=settings.heuresHebdo*60*sem, solde=total-forfait;
-
-  // Solde cumulé année jusqu'à ce mois
-  const totalAnnee=Object.entries(data).reduce((a,[k,v])=>{const d=parseKey(k);return(d.getFullYear()===y&&d.getMonth()<=mo)?a+calcJour(v):a;},0);
-  const semAnnee=Array.from({length:mo+1},(_,i)=>{const d1=new Date(y,i,1),d2=new Date(y,i+1,0);return Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);}).reduce((a,b)=>a+b,0);
-  const soldeAnnee=totalAnnee-settings.heuresHebdo*60*semAnnee;
-
-  const firstDayOfMonth=(new Date(y,mo,1).getDay()-settings.firstDay+7)%7;
-  const cells=[];
-  for(let i=0;i<firstDayOfMonth;i++) cells.push(null);
-  for(let i=1;i<=dim;i++) cells.push(new Date(y,mo,i));
-
-  const dark=settings.theme!=="light";
-  // Jours ordonnés selon firstDay
-  const joursOrdres=Array.from({length:7},(_,i)=>JOURS_FULL_FR[(settings.firstDay-1+i)%7].slice(0,3));
-
-  return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setDate(1);d.setMonth(d.getMonth()-1);setCurrentDate(d);}}>‹</button>
-        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{MOIS[mo]} {y}</div>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setDate(1);d.setMonth(d.getMonth()+1);setCurrentDate(d);}}>›</button>
-      </div>
-      <div style={S.calGrid}>
-        {joursOrdres.map(j=><div key={j} style={{...S.calHeader,color:dark?"#8b86aa":"#aaa"}}>{j}</div>)}
-        {cells.map((d,i)=>{
-          if(!d) return <div key={`e${i}`}/>;
-          const dk=dateKey(d),entry=data[dk],mins=calcJour(entry),isToday=dk===todayKey,isSpecial=entry?.special;
-          return (
-            <div key={dk} style={{...S.calCell,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSpecial?{background:dark?"#1c1616":"#fff5f5"}:{})}} onClick={()=>setEditDay(dk)}>
-              <div style={{...S.calDay,color:dark?"#f0eeff":"#1a1a2e"}}>{d.getDate()}</div>
-              {isSpecial?<div style={S.calSpecialTag}>{entry.special==="repos"?"R":"F"}</div>:mins>0?<div style={S.calHours}>{minutesToHM(mins)}</div>:null}
-            </div>
-          );
-        })}
-      </div>
-      <SummaryCard dark={dark} rows={[
-        {label:"Total mois", value:minutesToHM(total), bold:true},
-        {label:`Forfait (${sem} sem.)`, value:minutesToHM(forfait)},
-        {label:"Solde mois", value:(solde>=0?"+":"")+minutesToHM(solde), color:solde>=0?"#4ade80":"#f87171", solde:true},
-        {label:"Solde cumulé année", value:(soldeAnnee>=0?"+":"")+minutesToHM(soldeAnnee), color:soldeAnnee>=0?"#4ade80":"#f87171", solde:true},
-      ]}/>
-    </div>
-  );
-}
-
-// ─── VUE ANNÉE ───────────────────────────────────────────────────────────────
-function VueAnnee({currentDate,setCurrentDate,data,settings,setCurrentDateAndView}){
-  const y=currentDate.getFullYear();
-  const totalAnnee=Object.entries(data).reduce((a,[k,v])=>parseKey(k).getFullYear()===y?a+calcJour(v):a,0);
-  const semAnnee=Array.from({length:12},(_,i)=>{const d1=new Date(y,i,1),d2=new Date(y,i+1,0);return Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);}).reduce((a,b)=>a+b,0);
-  const forfait=settings.heuresHebdo*60*semAnnee, solde=totalAnnee-forfait;
-  const dark=settings.theme!=="light";
-
-  return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setFullYear(d.getFullYear()-1);setCurrentDate(d);}}>‹</button>
-        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{y}</div>
-        <button style={{...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"}} onClick={()=>{const d=new Date(currentDate);d.setFullYear(d.getFullYear()+1);setCurrentDate(d);}}>›</button>
-      </div>
-      <div style={S.moisGrid}>
-        {MOIS.map((m,i)=>{
-          const tot=Object.entries(data).reduce((a,[k,v])=>{const d=parseKey(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v):a;},0);
-          const j=Object.keys(data).filter(k=>{const d=parseKey(k);return d.getFullYear()===y&&d.getMonth()===i&&!data[k].special&&calcJour(data[k])>0;}).length;
-          return (
-            <div key={m} style={{...S.moisCard,background:dark?"#16162a":"#f7f7fb"}} onClick={()=>setCurrentDateAndView(new Date(y,i,1),"mois")}>
-              <div style={{...S.moisNom,color:dark?"#8b86aa":"#aaa"}}>{m.slice(0,3)}</div>
-              <div style={S.moisHours}>{minutesToHM(tot)}</div>
-              <div style={{...S.moisJours,color:dark?"#8b86aa":"#aaa"}}>{j}j</div>
-            </div>
-          );
-        })}
-      </div>
-      <SummaryCard dark={dark} rows={[
-        {label:"Total année", value:minutesToHM(totalAnnee), bold:true},
-        {label:`Forfait (${semAnnee} sem.)`, value:minutesToHM(forfait)},
-        {label:"Solde année", value:(solde>=0?"+":"")+minutesToHM(solde), color:solde>=0?"#4ade80":"#f87171", solde:true},
-      ]}/>
     </div>
   );
 }
 
 // ─── SUMMARY CARD ────────────────────────────────────────────────────────────
-function SummaryCard({rows, dark}){
+function SummaryCard({rows,dark}){
   return (
     <div style={{...S.summaryCard,background:dark?"#16162a":"#f0f0f8"}}>
       {rows.map((r,i)=>(
-        <div key={i} style={{...S.summaryRow,...(r.solde?{...S.soldeRow,borderTop:`1px solid ${dark?"#2a2a3a":"#ddd"}`}:{}),color:dark?"#b0aac8":"#555"}}>
-          <span>{r.label}</span>
-          <strong style={{color:r.color||(dark?"#f0eeff":"#1a1a2e")}}>{r.value}</strong>
+        <div key={i} style={{...S.summaryRow,color:dark?"#b0aac8":"#555",...(r.sep?{borderTop:`1px solid ${dark?"#2a2a3a":"#ddd"}`,marginTop:5,paddingTop:7,fontSize:15}:{})}}>
+          <span style={{fontSize:r.sep?14:13}}>{r.label}</span>
+          <strong style={{color:r.color||(dark?"#f0eeff":"#1a1a2e"),fontSize:r.sep?15:14}}>{r.value}</strong>
         </div>
       ))}
     </div>
   );
 }
 
+// ─── VUE SEMAINE ─────────────────────────────────────────────────────────────
+function VueSemaine({cur,setCur,data,settings,setEdit}){
+  const today=new Date(), todayKey=dk(today);
+  const days=wkDays(cur,settings.firstDay);
+  const total=days.reduce((a,d)=>a+calcJour(data[dk(d)]),0);
+  const solde=total-settings.heuresHebdo*60;
+  const dark=settings.theme!=="light";
+  const ws=days[0],we=days[6];
+
+  return (
+    <div style={S.viewContainer}>
+      <div style={S.navRow}>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(d.getDate()-7);setCur(d);}}>‹</button>
+        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{ws.getDate()} {MOIS[ws.getMonth()].slice(0,3)} – {we.getDate()} {MOIS[we.getMonth()].slice(0,3)} {we.getFullYear()}</div>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(d.getDate()+7);setCur(d);}}>›</button>
+      </div>
+      <div style={S.daysGrid}>
+        {days.map(d=>{
+          const dkk=dk(d),e=data[dkk],mins=calcJour(e),isToday=dkk===todayKey,isSp=e?.special;
+          return (
+            <div key={dkk} onClick={()=>setEdit(dkk)}
+              style={{...S.dayCard,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSp?{background:dark?"#1c1616":"#fff5f5"}:{})}}>
+              <div style={{...S.dayName,color:dark?"#8b86aa":"#aaa"}}>{jourCourt(d)}</div>
+              <div style={{...S.dayNum,color:dark?"#f0eeff":"#1a1a2e"}}>{d.getDate()}</div>
+              {isSp?<div style={S.specialTag}>{e.special==="repos"?"R":"F"}</div>
+               :mins>0?<div style={S.dayHours}>{min2hm(mins)}</div>
+               :e&&!isSp?<div style={{...S.dayHours,color:"#facc15"}}>…</div>
+               :<div style={{...S.dayEmpty,color:dark?"#2e2e44":"#ccc"}}>—</div>}
+            </div>
+          );
+        })}
+      </div>
+      <SummaryCard dark={dark} rows={[
+        {label:"Total semaine", value:min2hm(total)},
+        {label:"Forfait", value:`${settings.heuresHebdo}h00`},
+        {label:"Solde semaine", value:(solde>=0?"+":"")+min2hm(solde), color:solde>=0?"#4ade80":"#f87171", sep:true},
+      ]}/>
+    </div>
+  );
+}
+
+// ─── VUE MOIS ────────────────────────────────────────────────────────────────
+function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,save}){
+  const today=new Date(), todayKey=dk(today);
+  const y=cur.getFullYear(), mo=cur.getMonth();
+  const ym=`${y}-${String(mo+1).padStart(2,"0")}`;
+  const dark=settings.theme!=="light";
+  const [showAdj,setShowAdj]=useState(false);
+
+  const total=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===mo)?a+calcJour(v):a;},0);
+  const dim=new Date(y,mo+1,0).getDate();
+  const sem=Math.ceil((dim+((new Date(y,mo,1).getDay()-settings.firstDay+7)%7))/7);
+  const forfait=settings.heuresHebdo*60*sem;
+  const adjMin=adjustments[ym]?.minutes||0;
+  const soldeMois=total-forfait;
+  const soldeMoisNet=soldeMois-adjMin;
+
+  // Solde cumulé année jusqu'à ce mois (net des ajustements)
+  let totalAnnee=0, forfaitAnnee=0, adjAnnee=0;
+  for(let i=0;i<=mo;i++){
+    const d1=new Date(y,i,1),d2=new Date(y,i+1,0);
+    const s=Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);
+    forfaitAnnee+=settings.heuresHebdo*60*s;
+    const ymk=`${y}-${String(i+1).padStart(2,"0")}`;
+    adjAnnee+=adjustments[ymk]?.minutes||0;
+    totalAnnee+=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v):a;},0);
+  }
+  const soldeAnnee=totalAnnee-forfaitAnnee-adjAnnee;
+
+  const firstDayOff=(new Date(y,mo,1).getDay()-settings.firstDay+7)%7;
+  const cells=[]; for(let i=0;i<firstDayOff;i++) cells.push(null); for(let i=1;i<=dim;i++) cells.push(new Date(y,mo,i));
+  const joursH=Array.from({length:7},(_,i)=>JOURS_FULL[(settings.firstDay-1+i)%7].slice(0,3));
+
+  const handleSaveAdj=(ym,val)=>{
+    const na={...adjustments,[ym]:val};
+    setAdjustments(na);
+    save(data,settings,na);
+  };
+
+  return (
+    <div style={S.viewContainer}>
+      <div style={S.navRow}>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()-1);setCur(d);}}>‹</button>
+        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{MOIS[mo]} {y}</div>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()+1);setCur(d);}}>›</button>
+      </div>
+      <div style={S.calGrid}>
+        {joursH.map(j=><div key={j} style={{...S.calHeader,color:dark?"#8b86aa":"#aaa"}}>{j}</div>)}
+        {cells.map((d,i)=>{
+          if(!d) return <div key={`e${i}`}/>;
+          const dkk=dk(d),e=data[dkk],mins=calcJour(e),isToday=dkk===todayKey,isSp=e?.special;
+          return (
+            <div key={dkk} onClick={()=>setEdit(dkk)}
+              style={{...S.calCell,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSp?{background:dark?"#1c1616":"#fff5f5"}:{})}}>
+              <div style={{...S.calDay,color:dark?"#f0eeff":"#1a1a2e"}}>{d.getDate()}</div>
+              {isSp?<div style={S.calSpecialTag}>{e.special==="repos"?"R":"F"}</div>:mins>0?<div style={S.calHours}>{min2hm(mins)}</div>:null}
+            </div>
+          );
+        })}
+      </div>
+
+      <SummaryCard dark={dark} rows={[
+        {label:"Total mois", value:min2hm(total)},
+        {label:`Forfait (${sem} sem.)`, value:min2hm(forfait)},
+        {label:"Solde brut", value:(soldeMois>=0?"+":"")+min2hm(soldeMois), color:soldeMois>=0?"#4ade80":"#f87171", sep:true},
+        ...(adjMin!==0?[{label:`Ajustement (${adjustments[ym]?.motif||"—"})`, value:(adjMin>0?"−":"+")+min2hm(Math.abs(adjMin)), color:"#fb923c"}]:[]),
+        {label:"Solde net mois", value:(soldeMoisNet>=0?"+":"")+min2hm(soldeMoisNet), color:soldeMoisNet>=0?"#4ade80":"#f87171", sep:true},
+        {label:"Solde cumulé année", value:(soldeAnnee>=0?"+":"")+min2hm(soldeAnnee), color:soldeAnnee>=0?"#4ade80":"#f87171"},
+      ]}/>
+
+      <button onClick={()=>setShowAdj(true)}
+        style={{width:"100%",background:dark?"#1a1a28":"#f0f0f8",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`,borderRadius:10,padding:"10px",fontSize:13,color:dark?"#fb923c":"#b45309",cursor:"pointer",fontWeight:600,marginBottom:14}}>
+        ⚖️ Ajuster le solde {adjMin!==0?"(ajustement actif)":""}
+      </button>
+
+      {showAdj&&<AjustModal yearMonth={ym} adjustments={adjustments} onSave={handleSaveAdj} onClose={()=>setShowAdj(false)} dark={dark}/>}
+    </div>
+  );
+}
+
+// ─── VUE ANNÉE ───────────────────────────────────────────────────────────────
+function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
+  const y=cur.getFullYear(), dark=settings.theme!=="light";
+  let totalAnnee=0,forfaitAnnee=0,adjAnnee=0;
+  for(let i=0;i<12;i++){
+    const d1=new Date(y,i,1),d2=new Date(y,i+1,0);
+    const s=Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);
+    forfaitAnnee+=settings.heuresHebdo*60*s;
+    const ymk=`${y}-${String(i+1).padStart(2,"0")}`;
+    adjAnnee+=adjustments[ymk]?.minutes||0;
+    totalAnnee+=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v):a;},0);
+  }
+  const solde=totalAnnee-forfaitAnnee-adjAnnee;
+
+  return (
+    <div style={S.viewContainer}>
+      <div style={S.navRow}>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setFullYear(d.getFullYear()-1);setCur(d);}}>‹</button>
+        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{y}</div>
+        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setFullYear(d.getFullYear()+1);setCur(d);}}>›</button>
+      </div>
+      <div style={S.moisGrid}>
+        {MOIS.map((m,i)=>{
+          const tot=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v):a;},0);
+          const j=Object.keys(data).filter(k=>{const d=pk(k);return d.getFullYear()===y&&d.getMonth()===i&&!data[k].special&&calcJour(data[k])>0;}).length;
+          const ymk=`${y}-${String(i+1).padStart(2,"0")}`;
+          const hasAdj=adjustments[ymk]?.minutes;
+          return (
+            <div key={m} style={{...S.moisCard,background:dark?"#16162a":"#f7f7fb"}} onClick={()=>setCurAndView(new Date(y,i,1),"mois")}>
+              <div style={{...S.moisNom,color:dark?"#8b86aa":"#aaa"}}>{m.slice(0,3)}</div>
+              <div style={S.moisHours}>{min2hm(tot)}</div>
+              <div style={{...S.moisJours,color:dark?"#8b86aa":"#aaa"}}>{j}j{hasAdj?<span style={{color:"#fb923c"}}>*</span>:""}</div>
+            </div>
+          );
+        })}
+      </div>
+      <SummaryCard dark={dark} rows={[
+        {label:"Total année", value:min2hm(totalAnnee)},
+        {label:"Forfait annuel", value:min2hm(forfaitAnnee)},
+        {label:"Ajustements", value:(adjAnnee>0?"−":"+")+min2hm(Math.abs(adjAnnee)), color:"#fb923c"},
+        {label:"Solde net année", value:(solde>=0?"+":"")+min2hm(solde), color:solde>=0?"#4ade80":"#f87171", sep:true},
+      ]}/>
+    </div>
+  );
+}
+
 // ─── VUE PARAMÈTRES ──────────────────────────────────────────────────────────
 function VueSettings({settings,updateSettings,exportCSV,exportPDF,exportJSON,importJSON,resetData,showToast}){
-  const [local,setLocal]=useState({...settings});
+  const [loc,setLoc]=useState({...settings});
   const fileRef=useRef();
   const dark=settings.theme!=="light";
-  const inp={...S.settingsInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
+  const inp={...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
   const sec={...S.settingsSection,background:dark?"#16162a":"#f0f0f8"};
+  const lbl={...S.settingsLabel,color:dark?"#8b86aa":"#777"};
+  const ttl={...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"};
+  const expBtn=(extra={})=>({...S.exportBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`,...extra});
+  const JOURS_S=["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
 
-  const JOURS_SEMAINE=["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
+  const [notifPerm,setNotifPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"unsupported");
+  const requestNotif=async()=>{
+    if(typeof Notification==="undefined"){showToast("Notifications non supportées ici");return;}
+    const p=await Notification.requestPermission();
+    setNotifPerm(p);
+    if(p==="granted") showToast("Notifications activées ✓");
+    else showToast("Permission refusée");
+  };
+  const scheduleTestNotif=()=>{
+    if(notifPerm!=="granted"){showToast("Active d'abord les notifications");return;}
+    new Notification("Badgeo",{body:"Test de notification ✓",icon:"⏱"});
+  };
 
   return (
     <div style={S.viewContainer}>
       <div style={sec}>
-        <div style={{...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"}}>⚙️ Paramètres</div>
-        <label style={{...S.settingsLabel,color:dark?"#8b86aa":"#777"}}>Prénom / Nom
-          <input style={inp} value={local.nom||""} onChange={e=>setLocal({...local,nom:e.target.value})} placeholder="ex. Thomas"/>
-        </label>
-        <label style={{...S.settingsLabel,color:dark?"#8b86aa":"#777"}}>Forfait hebdomadaire (h)
-          <input style={inp} type="number" min="1" max="80" value={local.heuresHebdo} onChange={e=>setLocal({...local,heuresHebdo:Number(e.target.value)})}/>
-        </label>
-        <label style={{...S.settingsLabel,color:dark?"#8b86aa":"#777"}}>Premier jour de la semaine
-          <select style={{...inp,padding:"9px 11px"}} value={local.firstDay} onChange={e=>setLocal({...local,firstDay:Number(e.target.value)})}>
-            {JOURS_SEMAINE.map((j,i)=><option key={i} value={(i+1)%7===0?7:(i+1)}>{j}</option>)}
+        <div style={ttl}>⚙️ Paramètres généraux</div>
+        <label style={lbl}>Prénom / Nom<input style={inp} value={loc.nom||""} onChange={e=>setLoc({...loc,nom:e.target.value})} placeholder="ex. Thomas"/></label>
+        <label style={lbl}>Forfait hebdomadaire (h)<input style={inp} type="number" min="1" max="80" value={loc.heuresHebdo} onChange={e=>setLoc({...loc,heuresHebdo:Number(e.target.value)})}/></label>
+        <label style={lbl}>Premier jour de la semaine
+          <select style={{...inp,padding:"9px 11px"}} value={loc.firstDay} onChange={e=>setLoc({...loc,firstDay:Number(e.target.value)})}>
+            {JOURS_S.map((j,i)=><option key={i} value={(i+1)%7===0?7:(i+1)}>{j}</option>)}
           </select>
         </label>
-        <label style={{...S.settingsLabel,color:dark?"#8b86aa":"#777"}}>Noms des périodes
-          <select style={{...inp,padding:"9px 11px"}} value={local.preset||"matinapm"} onChange={e=>setLocal({...local,preset:e.target.value})}>
+        <label style={lbl}>Noms des périodes
+          <select style={{...inp,padding:"9px 11px"}} value={loc.preset||"matinapm"} onChange={e=>setLoc({...loc,preset:e.target.value})}>
             <option value="matinapm">Matin / Après-midi</option>
             <option value="matinsoir">Matin / Soir</option>
           </select>
         </label>
-        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:dark?"#8b86aa":"#777",marginBottom:14,cursor:"pointer"}}>
-          <input type="checkbox" checked={!!local.singlePeriodDefault} onChange={e=>setLocal({...local,singlePeriodDefault:e.target.checked})}
-            style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+        <label style={lbl}>Arrondi automatique du pointage
+          <select style={{...inp,padding:"9px 11px"}} value={loc.roundMin||0} onChange={e=>setLoc({...loc,roundMin:Number(e.target.value)})}>
+            {ROUND_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+          </select>
+        </label>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:dark?"#8b86aa":"#777",marginBottom:12,cursor:"pointer"}}>
+          <input type="checkbox" checked={!!loc.singlePeriodDefault} onChange={e=>setLoc({...loc,singlePeriodDefault:e.target.checked})} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
           Période unique par défaut
         </label>
         <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:dark?"#8b86aa":"#777",marginBottom:14,cursor:"pointer"}}>
-          <input type="checkbox" checked={local.theme==="light"} onChange={e=>setLocal({...local,theme:e.target.checked?"light":"dark"})}
-            style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+          <input type="checkbox" checked={loc.theme==="light"} onChange={e=>setLoc({...loc,theme:e.target.checked?"light":"dark"})} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
           Thème clair
         </label>
-        <button style={S.saveBtn} onClick={()=>{updateSettings(local);showToast("Paramètres enregistrés ✓");}}>Enregistrer</button>
+        <button style={S.saveBtn} onClick={()=>{updateSettings(loc);showToast("Paramètres enregistrés ✓");}}>Enregistrer</button>
+      </div>
+
+      {/* Notifications */}
+      <div style={sec}>
+        <div style={ttl}>🔔 Notifications de rappel</div>
+        <div style={{fontSize:12,color:dark?"#666":"#aaa",marginBottom:10}}>Rappels personnalisables — nécessite l'autorisation du navigateur. Non garanti en veille sur iOS.</div>
+        {notifPerm!=="granted"?(
+          <button style={expBtn({color:dark?"#facc15":"#b45309"})} onClick={requestNotif}>Activer les notifications</button>
+        ):(
+          <>
+            <div style={{fontSize:12,color:"#4ade80",marginBottom:10}}>✓ Notifications autorisées</div>
+            <label style={lbl}>Heure de rappel matin
+              <input type="time" style={inp} value={loc.notifMatin||""} onChange={e=>setLoc({...loc,notifMatin:e.target.value})} placeholder="ex. 08:00"/>
+            </label>
+            <label style={lbl}>Heure de rappel soir
+              <input type="time" style={inp} value={loc.notifSoir||""} onChange={e=>setLoc({...loc,notifSoir:e.target.value})} placeholder="ex. 18:00"/>
+            </label>
+            <div style={{display:"flex",gap:8}}>
+              <button style={{...S.saveBtn,fontSize:13}} onClick={()=>{updateSettings(loc);showToast("Rappels enregistrés ✓");}}>Enregistrer</button>
+              <button style={{...expBtn(),fontSize:13,flex:1}} onClick={scheduleTestNotif}>Tester</button>
+            </div>
+          </>
+        )}
       </div>
 
       <div style={sec}>
-        <div style={{...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"}}>📤 Export</div>
-        <button style={{...S.exportBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} onClick={exportCSV}>Exporter CSV</button>
-        <button style={{...S.exportBtn,marginTop:8,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} onClick={exportPDF}>Exporter / Imprimer PDF</button>
-        <button style={{...S.exportBtn,marginTop:8,background:dark?"#1a1a28":"#eeeef6",color:dark?"#4ade80":"#16a34a",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} onClick={exportJSON}>💾 Sauvegarder (JSON)</button>
+        <div style={ttl}>📤 Export</div>
+        <button style={expBtn()} onClick={exportCSV}>Exporter CSV</button>
+        <button style={{...expBtn(),marginTop:8}} onClick={exportPDF}>Exporter / Imprimer PDF</button>
+        <button style={{...expBtn({color:dark?"#4ade80":"#16a34a"}),marginTop:8}} onClick={exportJSON}>💾 Sauvegarder (JSON)</button>
       </div>
-
       <div style={sec}>
-        <div style={{...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"}}>📥 Import</div>
+        <div style={ttl}>📥 Import</div>
         <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>importJSON(e.target.files[0])}/>
-        <button style={{...S.exportBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#facc15":"#b45309",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`}} onClick={()=>fileRef.current.click()}>📂 Restaurer depuis JSON</button>
-        <div style={{fontSize:11,color:dark?"#666":"#aaa",marginTop:6}}>Remplace toutes les données actuelles par celles du fichier.</div>
+        <button style={expBtn({color:dark?"#facc15":"#b45309"})} onClick={()=>fileRef.current.click()}>📂 Restaurer depuis JSON</button>
+        <div style={{fontSize:11,color:dark?"#666":"#aaa",marginTop:6}}>Remplace toutes les données actuelles.</div>
       </div>
-
       <div style={sec}>
-        <div style={{...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"}}>⚠️ Danger</div>
+        <div style={ttl}>⚠️ Danger</div>
         <button style={S.dangerBtn} onClick={resetData}>Effacer toutes les données</button>
       </div>
     </div>
   );
 }
 
-// ─── COMPOSANT PRINCIPAL ─────────────────────────────────────────────────────
+// ─── HELPERS STYLES ──────────────────────────────────────────────────────────
+const nb=dark=>({background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7",...S.navBtn});
+
+// ─── APP PRINCIPALE ──────────────────────────────────────────────────────────
 function Badgeo(){
   const [view,setView]=useState("semaine");
-  const [currentDate,setCurrentDate]=useState(new Date());
+  const [cur,setCur]=useState(new Date());
   const [data,setData]=useState({});
-  const [settings,setSettings]=useState({heuresHebdo:35,nom:"",firstDay:1,preset:"matinapm",singlePeriodDefault:false,theme:"dark"});
+  const [adjustments,setAdjustments]=useState({});
+  const [settings,setSettings]=useState({heuresHebdo:35,nom:"",firstDay:1,preset:"matinapm",singlePeriodDefault:false,theme:"dark",roundMin:0,notifMatin:"",notifSoir:""});
   const [editDay,setEditDay]=useState(null);
   const [toast,setToast]=useState(null);
   const [flash,setFlash]=useState(null);
+  const [singleToday,setSingleToday]=useState(false);
 
   useEffect(()=>{
     try{
-      const d=localStorage.getItem("badgeo_data"),s=localStorage.getItem("badgeo_settings");
+      const d=localStorage.getItem("badgeo_data"),s=localStorage.getItem("badgeo_settings"),a=localStorage.getItem("badgeo_adj");
       if(d) setData(JSON.parse(d));
-      if(s) setSettings(prev=>({...prev,...JSON.parse(s)}));
+      if(s) setSettings(p=>({...p,...JSON.parse(s)}));
+      if(a) setAdjustments(JSON.parse(a));
     }catch{}
   },[]);
 
-  // Appliquer thème
   useEffect(()=>{
     document.body.style.background=settings.theme==="light"?"#f4f4f8":"#0c0c14";
     document.body.style.color=settings.theme==="light"?"#1a1a2e":"#e8e6f0";
+    document.body.className=settings.theme==="light"?"light":"";
   },[settings.theme]);
 
-  const save=useCallback((nd,ns)=>{
-    try{ localStorage.setItem("badgeo_data",JSON.stringify(nd)); localStorage.setItem("badgeo_settings",JSON.stringify(ns)); }catch{}
+  // Notifications schedulées via interval
+  useEffect(()=>{
+    if(typeof Notification==="undefined"||Notification.permission!=="granted") return;
+    const check=()=>{
+      const now=new Date(),hhmm=`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+      const todayEntry=data[dk(now)]||{};
+      if(settings.notifMatin&&hhmm===settings.notifMatin&&!todayEntry.matin_debut)
+        new Notification("Badgeo",{body:"N'oublie pas de pointer ton arrivée ! 🌅"});
+      if(settings.notifSoir&&hhmm===settings.notifSoir){
+        const hasSingle=settings.singlePeriodDefault||todayEntry.singlePeriod;
+        const lastField=hasSingle?"matin_fin":"soir_fin";
+        if(!todayEntry[lastField]) new Notification("Badgeo",{body:"N'oublie pas de pointer ton départ ! 🌙"});
+      }
+    };
+    const id=setInterval(check,30000);
+    return ()=>clearInterval(id);
+  },[settings.notifMatin,settings.notifSoir,data,settings.singlePeriodDefault]);
+
+  const saveAll=useCallback((nd,ns,na)=>{
+    try{
+      localStorage.setItem("badgeo_data",JSON.stringify(nd));
+      localStorage.setItem("badgeo_settings",JSON.stringify(ns));
+      localStorage.setItem("badgeo_adj",JSON.stringify(na));
+    }catch{}
   },[]);
 
-  const showToast=msg=>{ setToast(msg); setTimeout(()=>setToast(null),2500); };
-
-  const handleSaveDay=useCallback((dk,val)=>{ setData(prev=>{const nd={...prev,[dk]:val};save(nd,settings);return nd;}); showToast("Enregistré ✓"); },[settings,save]);
-  const handleDeleteDay=useCallback((dk)=>{ setData(prev=>{const nd={...prev};delete nd[dk];save(nd,settings);return nd;}); showToast("Entrée supprimée"); },[settings,save]);
-  const updateSettings=useCallback(s=>{ setSettings(s); save(data,s); },[data,save]);
-  const setCurrentDateAndView=(d,v)=>{ setCurrentDate(d); setView(v); };
+  const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2500);};
+  const handleSaveDay=useCallback((dkk,val)=>{setData(p=>{const nd={...p,[dkk]:val};saveAll(nd,settings,adjustments);return nd;});showToast("Enregistré ✓");},[settings,adjustments,saveAll]);
+  const handleDelDay=useCallback((dkk)=>{setData(p=>{const nd={...p};delete nd[dkk];saveAll(nd,settings,adjustments);return nd;});showToast("Supprimé");},[settings,adjustments,saveAll]);
+  const updateSettings=useCallback(s=>{setSettings(s);saveAll(data,s,adjustments);},[data,adjustments,saveAll]);
+  const setCurAndView=(d,v)=>{setCur(d);setView(v);};
 
   const handlePointage=()=>{
     const now=new Date(),h=now.getHours(),m=now.getMinutes();
     let targetDate=new Date(now),apresMinuit=false;
-    if(h<6){ targetDate.setDate(targetDate.getDate()-1); apresMinuit=true; }
-    const dk=dateKey(targetDate),existing=data[dk]||{};
-    if(existing.special){ showToast("Jour Repos/Férié — modifie-le d'abord"); return; }
-    const useSingle=settings.singlePeriodDefault||existing.singlePeriod;
-    const idx=nextCreneauIndex(existing,useSingle);
-    if(idx===-1){ showToast("Journée complète — ouvre le jour pour corriger"); return; }
-    const creneaux=getCraneaux(PRESETS[settings.preset]||PRESETS.matinapm);
+    if(h<6){targetDate.setDate(targetDate.getDate()-1);apresMinuit=true;}
+    const dkk=dk(targetDate),existing=data[dkk]||{};
+    if(existing.special){showToast("Jour Repos/Férié — modifie-le d'abord");return;}
+    const useSingle=singleToday||settings.singlePeriodDefault||existing.singlePeriod;
+    const idx=nextFieldIdx(existing,useSingle);
+    if(idx===-1){showToast("Journée complète — ouvre le jour pour corriger");return;}
+    const creneaux=getCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
     const creneau=creneaux[idx];
-    let heureStr=`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-    if(apresMinuit) heureStr=`${h+24}:${String(m).padStart(2,"0")}`;
-    handleSaveDay(dk,{...existing,[creneau.field]:heureStr});
-    const displayH=apresMinuit?`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")} †`:heureStr;
-    setFlash({label:creneau.label,heure:displayH,dk,icon:creneau.icon,color:creneau.color});
+    const rnd=settings.roundMin||0;
+    const totalMins=roundMin(h*60+m,rnd);
+    let hh=Math.floor(totalMins/60),mm=totalMins%60;
+    if(apresMinuit) hh+=24;
+    const heureStr=`${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+    const nd={...existing,[creneau.field]:heureStr};
+    if(useSingle&&!existing.singlePeriod) nd.singlePeriod=true;
+    handleSaveDay(dkk,nd);
+    const displayH=apresMinuit?`${String(hh-24).padStart(2,"0")}:${String(mm).padStart(2,"0")} †`:heureStr;
+    setFlash({label:creneau.label,heure:displayH,dkk,icon:creneau.icon,color:creneau.color});
     setTimeout(()=>setFlash(null),4000);
   };
 
   const exportCSV=()=>{
     const labels=PRESETS[settings.preset]||PRESETS.matinapm;
-    const rows=[[`Date`,`Jour`,`Type`,`Arrivée ${labels.p1}`,`Départ ${labels.p1}`,`Arrivée ${labels.p2}`,`Départ ${labels.p2}`,`Total (h)`]];
+    const rows=[[`Date`,`Jour`,`Type`,`Arr. ${labels.p1}`,`Dép. ${labels.p1}`,`Début pause`,`Fin pause`,`Pause`,`Arr. ${labels.p2}`,`Dép. ${labels.p2}`,`Total net (h)`]];
     for(const k of Object.keys(data).sort()){
-      const v=data[k],d=parseKey(k),j=JOURS_FULL_FR[(d.getDay()+6)%7];
-      if(v.special) rows.push([k,j,TYPE_SPECIAL[v.special]||v.special,"","","","","0"]);
-      else rows.push([k,j,"Travail",displayHeure(v.matin_debut),displayHeure(v.matin_fin),displayHeure(v.soir_debut),displayHeure(v.soir_fin),(calcJour(v)/60).toFixed(2)]);
+      const v=data[k],d=pk(k),j=JOURS_FULL[(d.getDay()+6)%7];
+      if(v.special) rows.push([k,j,TYPE_SPECIAL[v.special]||v.special,"","","","","","","","0"]);
+      else rows.push([k,j,"Travail",dispH(v.matin_debut),dispH(v.matin_fin),dispH(v.pause_debut),dispH(v.pause_fin),(calcPause(v)/60).toFixed(2),v.singlePeriod?"(période unique)":dispH(v.soir_debut),v.singlePeriod?"":dispH(v.soir_fin),(calcJour(v)/60).toFixed(2)]);
     }
     const blob=new Blob(["\uFEFF"+rows.map(r=>r.join(";")).join("\n")],{type:"text/csv;charset=utf-8;"});
     const url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download="badgeo.csv"; a.click(); URL.revokeObjectURL(url);
@@ -427,25 +581,26 @@ function Badgeo(){
   };
 
   const exportJSON=()=>{
-    const payload={ version:2, exportDate:new Date().toISOString(), data, settings };
+    const payload={version:3,exportDate:new Date().toISOString(),data,settings,adjustments};
     const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download=`badgeo-backup-${dateKey(new Date())}.json`; a.click(); URL.revokeObjectURL(url);
+    const url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download=`badgeo-backup-${dk(new Date())}.json`; a.click(); URL.revokeObjectURL(url);
     showToast("Sauvegarde JSON téléchargée ✓");
   };
 
-  const importJSON=(file)=>{
+  const importJSON=file=>{
     if(!file) return;
     const reader=new FileReader();
     reader.onload=e=>{
       try{
-        const payload=JSON.parse(e.target.result);
-        if(!payload.data) throw new Error("Format invalide");
-        if(window.confirm("Remplacer toutes les données actuelles par celles du fichier ?")){
-          const ns=payload.settings?{...settings,...payload.settings}:settings;
-          setData(payload.data); setSettings(ns); save(payload.data,ns);
+        const p=JSON.parse(e.target.result);
+        if(!p.data) throw new Error();
+        if(window.confirm("Remplacer toutes les données actuelles ?")){
+          const ns=p.settings?{...settings,...p.settings}:settings;
+          const na=p.adjustments||{};
+          setData(p.data); setSettings(ns); setAdjustments(na); saveAll(p.data,ns,na);
           showToast("Données restaurées ✓");
         }
-      }catch{ showToast("Fichier JSON invalide ✗"); }
+      }catch{showToast("Fichier JSON invalide ✗");}
     };
     reader.readAsText(file);
   };
@@ -453,39 +608,41 @@ function Badgeo(){
   const exportPDF=()=>{
     const labels=PRESETS[settings.preset]||PRESETS.matinapm;
     const sorted=Object.keys(data).sort(),semaines={};
-    for(const k of sorted){ const ws=dateKey(getWeekStart(parseKey(k),settings.firstDay)); if(!semaines[ws]) semaines[ws]=[]; semaines[ws].push(k); }
-    let html=`<html><head><meta charset="utf-8"><title>Badgeo</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:6px}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}th{background:#f5f5f5}.pos{color:green}.neg{color:red}</style></head><body><h1>Badgeo${settings.nom?" — "+settings.nom:""}</h1><p>Forfait : <b>${settings.heuresHebdo}h/semaine</b></p>`;
+    for(const k of sorted){const ws=dk(wkStart(pk(k),settings.firstDay));if(!semaines[ws])semaines[ws]=[];semaines[ws].push(k);}
+    let html=`<html><head><meta charset="utf-8"><title>Badgeo</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:6px}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}th{background:#f5f5f5}.pos{color:green}.neg{color:red}.pause{color:#f97316}</style></head><body><h1>Badgeo${settings.nom?" — "+settings.nom:""}</h1><p>Forfait : <b>${settings.heuresHebdo}h/semaine</b></p>`;
     for(const [wk,keys] of Object.entries(semaines).sort()){
-      const ws=parseKey(wk),we=new Date(ws); we.setDate(ws.getDate()+6);
+      const ws=pk(wk),we=new Date(ws);we.setDate(ws.getDate()+6);
       const tot=keys.reduce((a,k)=>a+calcJour(data[k]),0),solde=tot-settings.heuresHebdo*60;
-      html+=`<h2>Semaine ${ws.getDate()} ${MOIS[ws.getMonth()].slice(0,3)} – ${we.getDate()} ${MOIS[we.getMonth()].slice(0,3)} ${we.getFullYear()}</h2><table><tr><th>Date</th><th>Jour</th><th>${labels.p1}</th><th>${labels.p2}</th><th>Total</th></tr>`;
+      html+=`<h2>Semaine ${ws.getDate()} ${MOIS[ws.getMonth()].slice(0,3)} – ${we.getDate()} ${MOIS[we.getMonth()].slice(0,3)} ${we.getFullYear()}</h2><table><tr><th>Date</th><th>Jour</th><th>${labels.p1}</th><th>Pause</th><th>${labels.p2}</th><th>Total net</th></tr>`;
       for(const k of keys){
-        const v=data[k],d=parseKey(k),j=JOURS_FULL_FR[(d.getDay()+6)%7];
-        if(v.special) html+=`<tr><td>${k}</td><td>${j}</td><td colspan="3" style="color:#888;font-style:italic">${TYPE_SPECIAL[v.special]||v.special}</td></tr>`;
+        const v=data[k],d=pk(k),j=JOURS_FULL[(d.getDay()+6)%7];
+        if(v.special) html+=`<tr><td>${k}</td><td>${j}</td><td colspan="4" style="color:#888;font-style:italic">${TYPE_SPECIAL[v.special]||v.special}</td></tr>`;
         else{
-          const mat=(v.matin_debut||v.matin_fin)?`${displayHeure(v.matin_debut)} → ${displayHeure(v.matin_fin)}`:"—";
-          const soi=v.singlePeriod?"(période unique)":(v.soir_debut||v.soir_fin)?`${displayHeure(v.soir_debut)} → ${displayHeure(v.soir_fin)}`:"—";
-          html+=`<tr><td>${k}</td><td>${j}</td><td>${mat}</td><td>${soi}</td><td>${minutesToHM(calcJour(v))}</td></tr>`;
+          const mat=(v.matin_debut||v.matin_fin)?`${dispH(v.matin_debut)} → ${dispH(v.matin_fin)}`:"—";
+          const pause=(v.pause_debut||v.pause_fin)?`${dispH(v.pause_debut)} → ${dispH(v.pause_fin)} (${min2hm(calcPause(v))})`:"—";
+          const soi=v.singlePeriod?"(période unique)":(v.soir_debut||v.soir_fin)?`${dispH(v.soir_debut)} → ${dispH(v.soir_fin)}`:"—";
+          html+=`<tr><td>${k}</td><td>${j}</td><td>${mat}</td><td class="pause">${pause}</td><td>${soi}</td><td>${min2hm(calcJour(v))}</td></tr>`;
         }
       }
-      html+=`<tr><td colspan="4"><b>Total semaine</b></td><td><b>${minutesToHM(tot)}</b> <span class="${solde>=0?"pos":"neg"}">(${solde>=0?"+":""}${minutesToHM(solde)})</span></td></tr></table>`;
+      html+=`<tr><td colspan="5"><b>Total semaine</b></td><td><b>${min2hm(tot)}</b> <span class="${solde>=0?"pos":"neg"}">(${solde>=0?"+":""}${min2hm(solde)})</span></td></tr></table>`;
     }
     html+="</body></html>";
-    const w=window.open("","_blank"); w.document.write(html); w.document.close(); w.print();
+    const w=window.open("","_blank");w.document.write(html);w.document.close();w.print();
     showToast("Fenêtre d'impression ouverte ✓");
   };
 
-  const resetData=()=>{ if(window.confirm("Supprimer toutes les données ?")){setData({});save({},settings);showToast("Données effacées");} };
+  const resetData=()=>{if(window.confirm("Supprimer toutes les données ?")){setData({});setAdjustments({});saveAll({},settings,{});showToast("Données effacées");}};
 
-  const today=new Date(),todayEntry=data[dateKey(today)]||{};
-  const useSingle=settings.singlePeriodDefault||todayEntry.singlePeriod;
-  const nextIdx=nextCreneauIndex(todayEntry,useSingle);
-  const creneaux=getCraneaux(PRESETS[settings.preset]||PRESETS.matinapm);
+  const today=new Date(),todayEntry=data[dk(today)]||{};
+  const useSingle=singleToday||settings.singlePeriodDefault||todayEntry.singlePeriod;
+  const nextIdx=nextFieldIdx(todayEntry,useSingle);
+  const creneaux=getCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
   const nextCreneau=nextIdx>=0?creneaux[nextIdx]:null;
   const dark=settings.theme!=="light";
 
   return (
     <div style={{...S.app,background:dark?"#0c0c14":"#f4f4f8",color:dark?"#e8e6f0":"#1a1a2e"}}>
+      {/* Header */}
       <div style={{...S.header,borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
         <div style={S.headerLeft}>
           <div style={S.logo}>⏱</div>
@@ -497,23 +654,34 @@ function Badgeo(){
         <button style={{...S.settingsIconBtn,color:dark?"#8b86aa":"#aaa"}} onClick={()=>setView(v=>v==="settings"?"semaine":"settings")}>{view==="settings"?"✕":"☰"}</button>
       </div>
 
+      {/* Zone pointage */}
       {view!=="settings"&&(
         <div style={{...S.pointageZone,borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
-          {nextCreneau?(
-            <button style={{...S.pointageBtn,background:dark?"linear-gradient(135deg,#1a1832,#211e3a)":"linear-gradient(135deg,#f0eeff,#e8e4ff)",border:`1.5px solid ${dark?"#3a3260":"#c4b8ff"}`}} onClick={handlePointage}>
-              <span style={{fontSize:30}}>{nextCreneau.icon}</span>
-              <div>
-                <div style={{...S.pointageBtnLabel,color:dark?"#8b86aa":"#aaa"}}>Pointer maintenant</div>
-                <div style={{...S.pointageBtnSub,color:nextCreneau.color}}>{nextCreneau.label}</div>
-              </div>
-              <div style={{...S.pointageArrow,color:dark?"#3a3260":"#c4b8ff"}}>→</div>
+          <div style={{display:"flex",gap:8,alignItems:"stretch"}}>
+            {nextCreneau?(
+              <button style={{...S.pointageBtn,flex:1,background:dark?"linear-gradient(135deg,#1a1832,#211e3a)":"linear-gradient(135deg,#f0eeff,#e8e4ff)",border:`1.5px solid ${dark?"#3a3260":"#c4b8ff"}`}} onClick={handlePointage}>
+                <span style={{fontSize:28}}>{nextCreneau.icon}</span>
+                <div style={{textAlign:"left"}}>
+                  <div style={{...S.pointageBtnLabel,color:dark?"#8b86aa":"#aaa"}}>Pointer maintenant</div>
+                  <div style={{...S.pointageBtnSub,color:nextCreneau.color}}>{nextCreneau.label}</div>
+                </div>
+                <div style={{...S.pointageArrow,color:dark?"#3a3260":"#c4b8ff"}}>→</div>
+              </button>
+            ):(
+              <div style={{...S.pointageDone,flex:1}}>✓ Journée complète</div>
+            )}
+            {/* Toggle période unique */}
+            <button onClick={()=>setSingleToday(v=>!v)}
+              title="Journée en une seule période"
+              style={{background:dark?(singleToday?"#221e38":"#16162a"):(singleToday?"#ede9ff":"#f0f0f8"),border:`1.5px solid ${singleToday?"#c4b8ff":dark?"#2a2a3a":"#ddd"}`,borderRadius:12,padding:"0 12px",cursor:"pointer",fontSize:18,color:singleToday?"#c4b8ff":dark?"#3a3260":"#ccc",flexShrink:0}}>
+              1
             </button>
-          ):(
-            <div style={S.pointageDone}>✓ Journée complète</div>
-          )}
+          </div>
+          {singleToday&&<div style={{fontSize:11,color:"#c4b8ff",marginTop:4,textAlign:"center"}}>Mode période unique activé</div>}
         </div>
       )}
 
+      {/* Flash */}
       {flash&&(
         <div style={{...S.flashCard,background:dark?"#161628":"#f0eeff",border:`1.5px solid ${dark?"#3a3260":"#c4b8ff"}`}}>
           <span style={{fontSize:26}}>{flash.icon}</span>
@@ -522,31 +690,33 @@ function Badgeo(){
             <div style={{fontSize:30,fontWeight:800,color:dark?"#f0eeff":"#1a1a2e",lineHeight:1.1}}>{flash.heure}</div>
             {flash.heure.includes("†")&&<div style={{fontSize:10,color:"#facc15"}}>Rattaché à la veille</div>}
           </div>
-          <button style={{...S.flashCorrect,border:`1px solid ${dark?"#3a3260":"#c4b8ff"}`,color:dark?"#8b86aa":"#aaa"}} onClick={()=>{setEditDay(flash.dk);setFlash(null);}}>Corriger</button>
+          <button style={{...S.flashCorrect,border:`1px solid ${dark?"#3a3260":"#c4b8ff"}`,color:dark?"#8b86aa":"#888"}} onClick={()=>{setEditDay(flash.dkk);setFlash(null);}}>Corriger</button>
         </div>
       )}
 
+      {/* Tabs */}
       {view!=="settings"&&(
         <div style={{...S.tabs,borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
           {[["semaine","Semaine"],["mois","Mois"],["annee","Année"]].map(([k,l])=>(
-            <button key={k} style={{...S.tab,...(view===k?{...S.tabActive,color:"#c4b8ff",borderBottomColor:"#c4b8ff"}:{color:dark?"#8b86aa":"#aaa"})}} onClick={()=>setView(k)}>{l}</button>
+            <button key={k} style={{...S.tab,color:view===k?"#c4b8ff":(dark?"#8b86aa":"#aaa"),borderBottom:`2px solid ${view===k?"#c4b8ff":"transparent"}`}} onClick={()=>setView(k)}>{l}</button>
           ))}
         </div>
       )}
 
       <div style={S.body}>
-        {view==="semaine"&&<VueSemaine currentDate={currentDate} setCurrentDate={setCurrentDate} data={data} settings={settings} setEditDay={setEditDay}/>}
-        {view==="mois"&&<VueMois currentDate={currentDate} setCurrentDate={setCurrentDate} data={data} settings={settings} setEditDay={setEditDay}/>}
-        {view==="annee"&&<VueAnnee currentDate={currentDate} setCurrentDate={setCurrentDate} data={data} settings={settings} setCurrentDateAndView={setCurrentDateAndView}/>}
+        {view==="semaine"&&<VueSemaine cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay}/>}
+        {view==="mois"&&<VueMois cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay} adjustments={adjustments} setAdjustments={setAdjustments} save={saveAll}/>}
+        {view==="annee"&&<VueAnnee cur={cur} setCur={setCur} data={data} settings={settings} setCurAndView={setCurAndView} adjustments={adjustments}/>}
         {view==="settings"&&<VueSettings settings={settings} updateSettings={updateSettings} exportCSV={exportCSV} exportPDF={exportPDF} exportJSON={exportJSON} importJSON={importJSON} resetData={resetData} showToast={showToast}/>}
       </div>
 
-      {editDay&&<DayEditor dk={editDay} data={data} settings={settings} onSave={handleSaveDay} onDelete={handleDeleteDay} onClose={()=>setEditDay(null)}/>}
+      {editDay&&<DayEditor dkey={editDay} data={data} settings={settings} onSave={handleSaveDay} onDelete={handleDelDay} onClose={()=>setEditDay(null)}/>}
       {toast&&<div style={{...S.toast,background:dark?"#2a2a3a":"#1a1a2e"}}>{toast}</div>}
     </div>
   );
 }
 
+// ─── STYLES ──────────────────────────────────────────────────────────────────
 const S={
   app:{fontFamily:"'DM Sans','Segoe UI',sans-serif",minHeight:"100vh",display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto"},
   header:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 20px 12px"},
@@ -555,18 +725,17 @@ const S={
   appTitle:{fontSize:19,fontWeight:700,letterSpacing:"-0.5px",fontStyle:"italic"},
   appSub:{fontSize:12},
   settingsIconBtn:{background:"none",border:"none",fontSize:22,cursor:"pointer"},
-  pointageZone:{padding:"12px 14px 10px"},
-  pointageBtn:{width:"100%",borderRadius:16,padding:"14px 18px",display:"flex",alignItems:"center",gap:14,cursor:"pointer"},
+  pointageZone:{padding:"10px 14px 10px"},
+  pointageBtn:{borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"},
   pointageBtnLabel:{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:1},
-  pointageBtnSub:{fontSize:17,fontWeight:700,marginTop:2},
+  pointageBtnSub:{fontSize:16,fontWeight:700,marginTop:2},
   pointageArrow:{marginLeft:"auto",fontSize:20},
   pointageDone:{textAlign:"center",color:"#4ade80",fontWeight:700,padding:"14px",fontSize:15},
   flashCard:{margin:"10px 14px 0",borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",gap:12},
   flashCorrect:{background:"none",borderRadius:8,padding:"6px 10px",fontSize:12,cursor:"pointer"},
   tabs:{display:"flex"},
-  tab:{flex:1,background:"none",border:"none",padding:"11px 0",fontSize:14,cursor:"pointer",fontWeight:500,borderBottom:"2px solid transparent"},
-  tabActive:{},
-  body:{flex:1,overflowY:"auto",paddingBottom:20},
+  tab:{flex:1,background:"none",border:"none",padding:"11px 0",fontSize:14,cursor:"pointer",fontWeight:500},
+  body:{flex:1,overflowY:"auto",paddingBottom:24},
   viewContainer:{padding:"14px 14px 0"},
   navRow:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14},
   navBtn:{border:"none",width:34,height:34,borderRadius:8,fontSize:20,cursor:"pointer"},
@@ -589,24 +758,20 @@ const S={
   moisNom:{fontSize:10,fontWeight:700,textTransform:"uppercase",marginBottom:3},
   moisHours:{fontSize:15,fontWeight:700,color:"#c4b8ff"},
   moisJours:{fontSize:10,marginTop:2},
-  summaryCard:{borderRadius:12,padding:"12px 14px",marginBottom:14},
-  summaryRow:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",fontSize:14},
-  soldeRow:{marginTop:5,paddingTop:7,fontSize:15},
+  summaryCard:{borderRadius:12,padding:"12px 14px",marginBottom:10},
+  summaryRow:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",fontSize:13},
   overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:100,display:"flex",alignItems:"flex-end"},
-  modal:{borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"18px 18px 32px",maxHeight:"90vh",overflowY:"auto"},
+  modal:{borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"18px 18px 32px",maxHeight:"92vh",overflowY:"auto"},
   modalHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14},
   modalDay:{fontSize:19,fontWeight:700},
   modalDate:{fontSize:12,marginTop:2},
   closeBtn:{background:"none",border:"none",fontSize:20,cursor:"pointer"},
-  specialRow:{display:"flex",gap:8,marginBottom:14},
+  specialRow:{display:"flex",gap:8,marginBottom:12},
   specialBtn:{flex:1,borderRadius:10,padding:"10px",fontSize:14,cursor:"pointer",fontWeight:600},
-  specialBtnOn:{},
-  creneauxGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12},
   creneauGroup:{borderRadius:12,padding:"12px"},
-  creneauGroupTitle:{fontSize:11,fontWeight:700,marginBottom:10,textTransform:"uppercase"},
+  creneauGroupTitle:{fontSize:11,fontWeight:700,marginBottom:8,textTransform:"uppercase"},
   lbl:{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,marginBottom:8},
-  tInput:{borderRadius:8,padding:"7px",fontSize:13,width:"100%",boxSizing:"border-box"},
-  totalJour:{textAlign:"right",color:"#c4b8ff",fontSize:15,marginBottom:8,fontWeight:700},
+  tInput:{borderRadius:8,padding:"7px 10px",fontSize:13,width:"100%",boxSizing:"border-box"},
   modalFooter:{display:"flex",gap:8,marginTop:14},
   saveBtn:{flex:1,background:"#c4b8ff",color:"#0c0c14",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer"},
   deleteBtn:{background:"#2a1414",border:"1px solid #f87171",color:"#f87171",borderRadius:12,padding:"13px 14px",fontSize:14,cursor:"pointer",fontWeight:600},
@@ -614,7 +779,7 @@ const S={
   settingsTitle:{fontSize:14,fontWeight:700,marginBottom:12},
   settingsLabel:{display:"flex",flexDirection:"column",gap:5,fontSize:13,fontWeight:600,marginBottom:12},
   settingsInput:{borderRadius:8,padding:"9px 11px",fontSize:14},
-  exportBtn:{width:"100%",borderRadius:10,padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600},
+  exportBtn:{width:"100%",borderRadius:10,padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600,marginBottom:0},
   dangerBtn:{width:"100%",background:"#2a1414",border:"1px solid #f87171",borderRadius:10,color:"#f87171",padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600},
   toast:{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",color:"#c4b8ff",padding:"9px 18px",borderRadius:20,fontSize:13,fontWeight:600,zIndex:200,whiteSpace:"nowrap"},
 };
