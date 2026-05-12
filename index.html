@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- V.4 -->
+<!-- V.4.1-->
 <html lang="fr">
 <head>
   <meta charset="UTF-8"/>
@@ -304,36 +304,48 @@ function VueSemaine({cur,setCur,data,settings,setEdit}){
 // ─── VUE MOIS ────────────────────────────────────────────────────────────────
 function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,saveAll}){
   const today=new Date(),todayKey=dk(today),y=cur.getFullYear(),mo=cur.getMonth();
-  const ym=`${y}-${String(mo+1).padStart(2,"0")}`;
+  const ym=y+"-"+String(mo+1).padStart(2,"0");
   const dark=settings.theme!=="light";
   const [showAdj,setShowAdj]=useState(false);
-  const total=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===mo)?a+calcJour(v,settings.paidBreak):a;},0);
+  const fd=Number(settings.firstDay)||1;
+  const hebdo=Number(settings.heuresHebdo)||35;
+
+  let total=0;
+  const allKeys=Object.keys(data);
+  for(let i=0;i<allKeys.length;i++){
+    const dd=pk(allKeys[i]);
+    if(dd.getFullYear()===y&&dd.getMonth()===mo) total+=calcJour(data[allKeys[i]],settings.paidBreak);
+  }
+
   const dim=new Date(y,mo+1,0).getDate();
-  const sem=Math.ceil((dim+((new Date(y,mo,1).getDay()-settings.firstDay+7)%7))/7);
-  const forfait=settings.heuresHebdo*60*sem;
+  const firstDayOff=((new Date(y,mo,1).getDay()-fd)+7)%7;
+  const sem=Math.ceil((dim+firstDayOff)/7);
+  const forfait=hebdo*60*sem;
   const adjLines=adjustments[ym]||[];
   const adjMin=totalAdj(adjLines);
   const soldeMois=total-forfait;
   const soldeMoisNet=soldeMois-adjMin;
 
-  // Cumulé année
   let totY=0,forfY=0,adjY=0;
   for(let i=0;i<=mo;i++){
-    const d1=new Date(y,i,1),d2=new Date(y,i+1,0);
-    forfY+=settings.heuresHebdo*60*Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);
+    const d1=new Date(y,i,1);
+    const d2=new Date(y,i+1,0);
+    const off=((d1.getDay()-fd)+7)%7;
+    forfY+=hebdo*60*Math.ceil((d2.getDate()+off)/7);
     const ymk=y+"-"+String(i+1).padStart(2,"0");
     adjY+=totalAdj(adjustments[ymk]||[]);
-    const keys=Object.keys(data);
-    for(let j=0;j<keys.length;j++){
-      const dd=pk(keys[j]);
-      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[keys[j]],settings.paidBreak);
+    for(let j=0;j<allKeys.length;j++){
+      const dd=pk(allKeys[j]);
+      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[allKeys[j]],settings.paidBreak);
     }
   }
   const soldeY=totY-forfY-adjY;
 
-  const firstDayOff=(new Date(y,mo,1).getDay()-settings.firstDay+7)%7;
-  const cells=[]; for(let i=0;i<firstDayOff;i++) cells.push(null); for(let i=1;i<=dim;i++) cells.push(new Date(y,mo,i));
-  const joursH=Array.from({length:7},(_,i)=>JOURS_FULL[(settings.firstDay-1+i)%7].slice(0,3));
+  const cells=[];
+  for(let i=0;i<firstDayOff;i++) cells.push(null);
+  for(let i=1;i<=dim;i++) cells.push(new Date(y,mo,i));
+  const joursH=[];
+  for(let i=0;i<7;i++) joursH.push(JOURS_FULL[((fd-1)+i)%7].slice(0,3));
 
   const handleSaveAdj=(ym,val)=>{ const na={...adjustments,[ym]:val}; setAdjustments(na); saveAll(data,settings,na); };
 
@@ -403,12 +415,16 @@ function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
         <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setFullYear(d.getFullYear()+1);setCur(d);}}>›</button>
       </div>
       <div style={S.moisGrid}>
-        {MOIS.map((m,i)=>{
-          let tot=0;
-          const keys=Object.keys(data);
-          for(let j=0;j<keys.length;j++){const dd=pk(keys[j]);if(dd.getFullYear()===y&&dd.getMonth()===i)tot+=calcJour(data[keys[j]],settings.paidBreak);}
-          let jj=0;
-          for(let j=0;j<keys.length;j++){const dd=pk(keys[j]);if(dd.getFullYear()===y&&dd.getMonth()===i&&!data[keys[j]].special&&calcJour(data[keys[j]],settings.paidBreak)>0)jj++;}
+        {MOIS.map(function(m,i){
+          let tot=0,jj=0;
+          for(let j=0;j<allKeys.length;j++){
+            const dd=pk(allKeys[j]);
+            if(dd.getFullYear()===y&&dd.getMonth()===i){
+              const v=calcJour(data[allKeys[j]],settings.paidBreak);
+              tot+=v;
+              if(!data[allKeys[j]].special&&v>0) jj++;
+            }
+          }
           const hasAdj=(adjustments[y+"-"+String(i+1).padStart(2,"0")]||[]).filter(function(l){return(l.heures||0)+(l.mins||0)>0;}).length>0;
           return (
             <div key={m} style={{...S.moisCard,background:dark?"#16162a":"#f7f7fb"}} onClick={()=>setCurAndView(new Date(y,i,1),"mois")}>
