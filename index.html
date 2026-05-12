@@ -418,8 +418,6 @@ function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,sa
 }
 
 // ─── VUE ANNÉE ───────────────────────────────────────────────────────────────
-
-// ─── VUE ANNÉE ───────────────────────────────────────────────────────────────
 function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
   const y = cur.getFullYear(), dark = settings.theme !== "light";
   const allKeys = Object.keys(data); // <-- ajouté
