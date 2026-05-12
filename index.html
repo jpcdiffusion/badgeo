@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- V.4.2 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8"/>
@@ -275,7 +276,17 @@ class SafeView extends React.Component {
 const nb = dark=>({...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"});
 
 // ─── Calcul ajustements (nouveau format tableau) ──────────────────────────────
-function totalAdj(adjLines){ if(!Array.isArray(adjLines)) return 0; return adjLines.reduce((a,l)=>a+((Math.abs(l.heures||0)*60+Math.abs(l.mins||0))*(l.signe==="-"?1:-1)),0); }
+function totalAdj(adjLines){
+  if(!adjLines) return 0;
+  var lines=Array.isArray(adjLines)?adjLines:Object.values(adjLines);
+  var t=0;
+  for(var i=0;i<lines.length;i++){
+    var l=lines[i];
+    if(!l||typeof l!=="object") continue;
+    t+=(Math.abs(l.heures||0)*60+Math.abs(l.mins||0))*(l.signe==="-"?1:-1);
+  }
+  return t;
+}
 
 // ─── VUE SEMAINE ─────────────────────────────────────────────────────────────
 function VueSemaine({cur,setCur,data,settings,setEdit}){
@@ -335,7 +346,7 @@ function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,sa
   const firstDayOff=((new Date(y,mo,1).getDay()-fd)+7)%7;
   const sem=Math.ceil((dim+firstDayOff)/7);
   const forfait=hebdo*60*sem;
-  const adjLines=adjustments[ym]||[];
+  const adjLines=Array.isArray(adjustments[ym])?adjustments[ym]:[];
   const adjMin=totalAdj(adjLines);
   const soldeMois=total-forfait;
   const soldeMoisNet=soldeMois-adjMin;
