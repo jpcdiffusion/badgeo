@@ -320,9 +320,13 @@ function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,sa
   for(let i=0;i<=mo;i++){
     const d1=new Date(y,i,1),d2=new Date(y,i+1,0);
     forfY+=settings.heuresHebdo*60*Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);
-    const ymk=`${y}-${String(i+1).padStart(2,"0")}`;
+    const ymk=y+"-"+String(i+1).padStart(2,"0");
     adjY+=totalAdj(adjustments[ymk]||[]);
-    totY+=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v,settings.paidBreak):a;},0);
+    const keys=Object.keys(data);
+    for(let j=0;j<keys.length;j++){
+      const dd=pk(keys[j]);
+      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[keys[j]],settings.paidBreak);
+    }
   }
   const soldeY=totY-forfY-adjY;
 
@@ -382,8 +386,12 @@ function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
   for(let i=0;i<12;i++){
     const d1=new Date(y,i,1),d2=new Date(y,i+1,0);
     forfY+=settings.heuresHebdo*60*Math.ceil((d2.getDate()+((d1.getDay()-settings.firstDay+7)%7))/7);
-    adjY+=totalAdj(adjustments[`${y}-${String(i+1).padStart(2,"0")}`]||[]);
-    totY+=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v,settings.paidBreak):a;},0);
+    adjY+=totalAdj(adjustments[y+"-"+String(i+1).padStart(2,"0")]||[]);
+    const keys=Object.keys(data);
+    for(let j=0;j<keys.length;j++){
+      const dd=pk(keys[j]);
+      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[keys[j]],settings.paidBreak);
+    }
   }
   const solde=totY-forfY-adjY;
   return (
@@ -395,14 +403,17 @@ function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
       </div>
       <div style={S.moisGrid}>
         {MOIS.map((m,i)=>{
-          const tot=Object.entries(data).reduce((a,[k,v])=>{const d=pk(k);return(d.getFullYear()===y&&d.getMonth()===i)?a+calcJour(v,settings.paidBreak):a;},0);
-          const j=Object.keys(data).filter(k=>{const d=pk(k);return d.getFullYear()===y&&d.getMonth()===i&&!data[k].special&&calcJour(data[k],settings.paidBreak)>0;}).length;
-          const hasAdj=(adjustments[`${y}-${String(i+1).padStart(2,"0")}`]||[]).filter(l=>(l.heures||0)+(l.mins||0)>0).length>0;
+          let tot=0;
+          const keys=Object.keys(data);
+          for(let j=0;j<keys.length;j++){const dd=pk(keys[j]);if(dd.getFullYear()===y&&dd.getMonth()===i)tot+=calcJour(data[keys[j]],settings.paidBreak);}
+          let jj=0;
+          for(let j=0;j<keys.length;j++){const dd=pk(keys[j]);if(dd.getFullYear()===y&&dd.getMonth()===i&&!data[keys[j]].special&&calcJour(data[keys[j]],settings.paidBreak)>0)jj++;}
+          const hasAdj=(adjustments[y+"-"+String(i+1).padStart(2,"0")]||[]).filter(function(l){return(l.heures||0)+(l.mins||0)>0;}).length>0;
           return (
             <div key={m} style={{...S.moisCard,background:dark?"#16162a":"#f7f7fb"}} onClick={()=>setCurAndView(new Date(y,i,1),"mois")}>
               <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",marginBottom:3,color:dark?"#8b86aa":"#aaa"}}>{m.slice(0,3)}</div>
               <div style={{fontSize:15,fontWeight:700,color:"#c4b8ff"}}>{m2h(tot)}</div>
-              <div style={{fontSize:10,marginTop:2,color:dark?"#8b86aa":"#aaa"}}>{j}j{hasAdj?<span style={{color:"#fb923c"}}>*</span>:""}</div>
+              <div style={{fontSize:10,marginTop:2,color:dark?"#8b86aa":"#aaa"}}>{jj}j{hasAdj?<span style={{color:"#fb923c"}}>*</span>:""}</div>
             </div>
           );
         })}
