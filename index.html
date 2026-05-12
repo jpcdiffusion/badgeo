@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- v.20 -->
 <html lang="fr">
 <head>
   <meta charset="UTF-8"/>
@@ -11,9 +10,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#0c0c14;color:#e8e6f0;font-family:'DM Sans','Segoe UI',sans-serif;transition:background .3s,color .3s}
-    input[type=time],input[type=text],input[type=number]{color-scheme:dark}
-    .light input[type=time],.light input[type=text],.light input[type=number]{color-scheme:light}
+    body{background:#0c0c14;color:#e8e6f0;font-family:'DM Sans','Segoe UI',sans-serif}
+    input,select{color-scheme:dark}
     select{appearance:none}
   </style>
 </head>
@@ -27,255 +25,36 @@ const MOIS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août"
 const TYPE_SPECIAL = { repos:"Repos", ferie:"Férié" };
 const PRESETS = { matinsoir:{p1:"Matin",p2:"Soir"}, matinapm:{p1:"Matin",p2:"Après-midi"} };
 const ROUND_OPTS = [{v:0,l:"Aucun"},{v:5,l:"5 min"},{v:10,l:"10 min"},{v:15,l:"15 min"}];
-const MAX_ADJ = 5;
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
-const dk  = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-const pk  = k => { const [y,m,d]=k.split("-").map(Number); return new Date(y,m-1,d); };
-const h2m = hm => { if(!hm) return null; const p=hm.split(":"); return (parseInt(p[0])||0)*60+(parseInt(p[1])||0); };
-const m2h = min => { if(min===null||min===undefined) return ""; const a=Math.abs(min),h=Math.floor(a/60),m=a%60; return `${min<0?"-":""}${h}h${String(m).padStart(2,"0")}`; };
-const dH  = hm => { if(!hm) return "—"; const h=parseInt(hm.split(":")[0]),m=hm.split(":")[1]; return h>=24?`${String(h-24).padStart(2,"0")}:${m}†`:hm; };
-const rnd = (min,r) => r>0?Math.round(min/r)*r:min;
+function dk(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function pk(k){ var p=k.split("-"); return new Date(Number(p[0]),Number(p[1])-1,Number(p[2])); }
+function h2m(hm){ if(!hm) return null; var p=hm.split(":"); return (parseInt(p[0])||0)*60+(parseInt(p[1])||0); }
+function m2h(min){ if(min===null||min===undefined) return ""; var a=Math.abs(min),h=Math.floor(a/60),m=a%60; return (min<0?"-":"")+h+"h"+String(m).padStart(2,"0"); }
+function dH(hm){ if(!hm) return "—"; var h=parseInt(hm.split(":")[0]),m=hm.split(":")[1]; return h>=24?String(h-24).padStart(2,"0")+":"+m+"†":hm; }
+function rnd(min,r){ return r>0?Math.round(min/r)*r:min; }
+function wkStart(d,fd){ var dt=new Date(d),day=dt.getDay(),diff=((day-fd)+7)%7; dt.setDate(dt.getDate()-diff); dt.setHours(0,0,0,0); return dt; }
+function wkDays(ref,fd){ var ws=wkStart(ref,fd),arr=[]; for(var i=0;i<7;i++){var d=new Date(ws);d.setDate(ws.getDate()+i);arr.push(d);} return arr; }
+function jCourt(d){ return JOURS_FULL[(d.getDay()+6)%7].slice(0,3); }
+function jNom(d){ return JOURS_FULL[(d.getDay()+6)%7]; }
 
-function wkStart(d,fd=1){ const dt=new Date(d),day=dt.getDay(),diff=((day-fd)+7)%7; dt.setDate(dt.getDate()-diff); dt.setHours(0,0,0,0); return dt; }
-function wkDays(ref,fd=1){ const ws=wkStart(ref,fd); return Array.from({length:7},(_,i)=>{ const d=new Date(ws); d.setDate(ws.getDate()+i); return d; }); }
-const jCourt = d => JOURS_FULL[(d.getDay()+6)%7].slice(0,3);
-const jNom   = d => JOURS_FULL[(d.getDay()+6)%7];
-
-// Calcul pause (peut y en avoir plusieurs : pause_debut/pause_fin, pause2_debut/pause2_fin...)
-function calcPauses(e, paidBreak=false){
+function calcPauses(e,paidBreak){
   if(!e||paidBreak) return 0;
-  let t=0;
-  const s=h2m(e.pause_debut), f=h2m(e.pause_fin);
-  if(s!==null&&f!==null){ let d=f-s; if(d<0) d+=24*60; t+=Math.max(0,d); }
-  return t;
+  var s=h2m(e.pause_debut),f=h2m(e.pause_fin);
+  if(s===null||f===null) return 0;
+  var d=f-s; if(d<0) d+=24*60; return Math.max(0,d);
 }
-
-function calcJour(e, paidBreak=false){
+function calcJour(e,paidBreak){
   if(!e||e.special) return 0;
-  let t=0;
-  const md=h2m(e.matin_debut), mf=h2m(e.matin_fin);
+  var t=0;
+  var md=h2m(e.matin_debut),mf=h2m(e.matin_fin);
   if(md!==null&&mf!==null&&mf>md) t+=mf-md;
   if(!e.singlePeriod){
-    const sd=h2m(e.soir_debut); let sf=h2m(e.soir_fin);
+    var sd=h2m(e.soir_debut),sf=h2m(e.soir_fin);
     if(sd!==null&&sf!==null){ if(sf<sd) sf+=24*60; if(sf>sd) t+=sf-sd; }
   }
-  return Math.max(0, t - calcPauses(e, paidBreak));
+  return Math.max(0,t-calcPauses(e,paidBreak));
 }
-
-// Ordre des champs de pointage principal (hors pause)
-function mainFields(single){ return single?["matin_debut","matin_fin"]:["matin_debut","matin_fin","soir_debut","soir_fin"]; }
-function nextMainIdx(e,single){ const f=mainFields(single||(e&&e.singlePeriod)); if(!e) return 0; for(let i=0;i<f.length;i++) if(!e[f[i]]) return i; return -1; }
-function nextPauseIdx(e){ if(!e) return null; if(!e.pause_debut) return "debut"; if(!e.pause_fin)   return "fin"; return null; }
-
-function getMainCreneaux(labels,single){
-  const p1=labels.p1||"Matin", p2=labels.p2||"Après-midi";
-  if(single) return [
-    {label:"Arrivée",         field:"matin_debut", icon:"🌅", color:"#4ade80"},
-    {label:"Départ",          field:"matin_fin",   icon:"🌙", color:"#c4b8ff"},
-  ];
-  return [
-    {label:`Arrivée ${p1}`,   field:"matin_debut", icon:"🌅", color:"#4ade80"},
-    {label:`Départ ${p1}`,    field:"matin_fin",   icon:"☀️",  color:"#facc15"},
-    {label:`Arrivée ${p2}`,   field:"soir_debut",  icon:"🌆", color:"#60a5fa"},
-    {label:`Départ ${p2}`,    field:"soir_fin",    icon:"🌙", color:"#c4b8ff"},
-  ];
-}
-
-// ─── MODAL JOUR ──────────────────────────────────────────────────────────────
-function DayEditor({dkey,data,settings,onSave,onDelete,onClose}){
-  const d=pk(dkey), labels=PRESETS[settings.preset]||PRESETS.matinapm;
-  const [loc,setLoc]=useState({...(data[dkey]||{})});
-  const dark=settings.theme!=="light";
-  const single=!!loc.singlePeriod;
-  const pauseMin=calcPauses(loc, settings.paidBreak);
-  const total=calcJour(loc, settings.paidBreak);
-  const upd=(f,v)=>setLoc(p=>{ const n={...p,special:undefined}; v?n[f]=v:delete n[f]; return n; });
-  const setSpecial=t=>setLoc(p=>p.special===t?{}:{special:t});
-  const toggleSingle=()=>setLoc(p=>({...p,singlePeriod:!p.singlePeriod,soir_debut:undefined,soir_fin:undefined}));
-  const handleSave=()=>{ const c={...loc}; Object.keys(c).forEach(k=>{if(c[k]===undefined||c[k]==="")delete c[k]}); onSave(dkey,c); onClose(); };
-  const bg=dark?"#14142a":"#fff", fg=dark?"#e8e6f0":"#1a1a2e", sub=dark?"#8b86aa":"#888";
-  const iS={...S.tInput,background:dark?"#0c0c14":"#f7f7fb",color:fg,border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
-
-  return (
-    <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{...S.modal,background:bg,color:fg}}>
-        <div style={S.modalHeader}>
-          <div>
-            <div style={{fontSize:19,fontWeight:700,color:fg}}>{jNom(d)}</div>
-            <div style={{fontSize:12,color:sub,marginTop:2}}>{d.getDate()} {MOIS[d.getMonth()]} {d.getFullYear()}</div>
-          </div>
-          <button style={{...S.closeBtn,color:sub}} onClick={onClose}>✕</button>
-        </div>
-
-        {/* Spéciaux */}
-        <div style={S.specialRow}>
-          {Object.entries(TYPE_SPECIAL).map(([k,v])=>(
-            <button key={k} onClick={()=>setSpecial(k)}
-              style={{...S.specialBtn,background:dark?(loc.special===k?"#221e38":"#1a1a28"):(loc.special===k?"#ede9ff":"#f0f0f8"),color:dark?(loc.special===k?"#c4b8ff":"#b0aac8"):(loc.special===k?"#6c5ce7":"#555"),border:`1.5px solid ${loc.special===k?"#c4b8ff":dark?"#2a2a3a":"#ddd"}`}}>{v}</button>
-          ))}
-        </div>
-
-        {!loc.special&&(<>
-          <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:13,color:sub,cursor:"pointer"}}>
-            <input type="checkbox" checked={single} onChange={toggleSingle} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
-            ⏳ Journée en une seule période
-          </label>
-
-          {/* Période 1 */}
-          <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8}}>
-            <div style={{...S.creneauGroupTitle,color:sub}}>🌅 {single?"Journée":labels.p1}</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-              <label style={{...S.lbl,color:sub}}>Arrivée<input type="time" style={iS} value={loc.matin_debut||""} onChange={e=>upd("matin_debut",e.target.value)}/></label>
-              <label style={{...S.lbl,color:sub}}>Départ<input type="time" style={iS} value={loc.matin_fin||""} onChange={e=>upd("matin_fin",e.target.value)}/></label>
-            </div>
-          </div>
-
-          {/* Pause */}
-          <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8,border:`1px solid ${dark?"#2a2040":"#ffe8d6"}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-              <div style={{...S.creneauGroupTitle,color:"#fb923c",margin:0}}>☕ Pause</div>
-              <span style={{fontSize:11,color:settings.paidBreak?"#4ade80":"#fb923c",fontWeight:600}}>{settings.paidBreak?"Payée":"Déduite"}</span>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-              <label style={{...S.lbl,color:sub}}>Départ pause<input type="time" style={iS} value={loc.pause_debut||""} onChange={e=>upd("pause_debut",e.target.value)}/></label>
-              <label style={{...S.lbl,color:sub}}>Retour pause<input type="time" style={iS} value={loc.pause_fin||""} onChange={e=>upd("pause_fin",e.target.value)}/></label>
-            </div>
-            {pauseMin>0&&!settings.paidBreak&&<div style={{fontSize:11,color:"#fb923c",marginTop:4}}>Déduite : {m2h(pauseMin)}</div>}
-            {pauseMin>0&&settings.paidBreak&&<div style={{fontSize:11,color:"#4ade80",marginTop:4}}>Payée : {m2h(pauseMin)} (non déduite)</div>}
-          </div>
-
-          {/* Période 2 */}
-          {!single&&(
-            <div style={{...S.creneauGroup,background:dark?"#1a1a28":"#f7f7fb",marginBottom:8}}>
-              <div style={{...S.creneauGroupTitle,color:sub}}>🌆 {labels.p2}</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <label style={{...S.lbl,color:sub}}>Arrivée<input type="time" style={iS} value={loc.soir_debut||""} onChange={e=>upd("soir_debut",e.target.value)}/></label>
-                <label style={{...S.lbl,color:sub}}>
-                  <span>Départ<span style={{fontSize:9,color:"#999",marginLeft:4}}>†après minuit</span></span>
-                  <input type="text" placeholder="18:30 ou 25:30" style={iS} value={loc.soir_fin||""} onChange={e=>upd("soir_fin",e.target.value)}/>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {total>0&&(
-            <div style={{textAlign:"right",color:"#c4b8ff",fontSize:15,marginBottom:8,fontWeight:700}}>
-              Total net : <strong>{m2h(total)}</strong>
-              {pauseMin>0&&!settings.paidBreak&&<span style={{fontSize:11,color:"#fb923c",marginLeft:8}}>(pause {m2h(pauseMin)} déduite)</span>}
-            </div>
-          )}
-        </>)}
-
-        <div style={S.modalFooter}>
-          {data[dkey]&&<button style={S.deleteBtn} onClick={()=>{onDelete(dkey);onClose();}}>Supprimer</button>}
-          <button style={S.saveBtn} onClick={handleSave}>Enregistrer</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MODAL AJUSTEMENTS (5 lignes) ────────────────────────────────────────────
-function AjustModal({yearMonth,adjustments,onSave,onClose,dark}){
-  const existing=adjustments[yearMonth]||[];
-  const empty={signe:"-",heures:0,mins:0,motif:""};
-  const [lines,setLines]=useState(existing.length>0?existing:[{...empty}]);
-  const bg=dark?"#14142a":"#fff",fg=dark?"#e8e6f0":"#1a1a2e",sub=dark?"#8b86aa":"#888";
-  const iS={...S.tInput,background:dark?"#0c0c14":"#f7f7fb",color:fg,border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
-
-  const updLine=(i,f,v)=>setLines(p=>p.map((l,idx)=>idx===i?{...l,[f]:v}:l));
-  const addLine=()=>{ if(lines.length<MAX_ADJ) setLines(p=>[...p,{...empty}]); };
-  const delLine=i=>setLines(p=>p.filter((_,idx)=>idx!==i));
-  const totalAdj=lines.reduce((a,l)=>{ const m=(Math.abs(l.heures||0)*60+Math.abs(l.mins||0))*(l.signe==="-"?1:-1); return a+m; },0);
-
-  const handleSave=()=>{
-    const clean=lines.filter(l=>(l.heures||0)+(l.mins||0)>0);
-    onSave(yearMonth,clean);
-    onClose();
-  };
-
-  return (
-    <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{...S.modal,background:bg,color:fg}}>
-        <div style={S.modalHeader}>
-          <div style={{fontSize:17,fontWeight:700,color:fg}}>⚖️ Ajustements du solde</div>
-          <button style={{...S.closeBtn,color:sub}} onClick={onClose}>✕</button>
-        </div>
-        <div style={{fontSize:12,color:sub,marginBottom:14}}>Heures récupérées (−) ou payées (−) déduites du solde. Heures bonus (+) ajoutées.</div>
-
-        {lines.map((l,i)=>(
-          <div key={i} style={{background:dark?"#1a1a28":"#f7f7fb",borderRadius:12,padding:"10px 12px",marginBottom:8,border:`1px solid ${dark?"#2a2a3a":"#eee"}`}}>
-            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-              <select value={l.signe} onChange={e=>updLine(i,"signe",e.target.value)}
-                style={{...iS,width:54,textAlign:"center",fontSize:18,fontWeight:700,padding:"6px 4px"}}>
-                <option value="-">−</option>
-                <option value="+">+</option>
-              </select>
-              <input type="number" min="0" max="999" placeholder="0" style={{...iS,flex:1,textAlign:"center"}} value={l.heures||""} onChange={e=>updLine(i,"heures",Number(e.target.value))}/>
-              <span style={{color:sub,fontSize:13}}>h</span>
-              <input type="number" min="0" max="59" placeholder="0" style={{...iS,flex:1,textAlign:"center"}} value={l.mins||""} onChange={e=>updLine(i,"mins",Number(e.target.value))}/>
-              <span style={{color:sub,fontSize:13}}>min</span>
-              <button onClick={()=>delLine(i)} style={{background:"none",border:"none",color:"#f87171",fontSize:18,cursor:"pointer",padding:"0 4px"}}>✕</button>
-            </div>
-            <input type="text" placeholder="Motif (ex. Heures sup payées)" style={{...iS,fontSize:12}} value={l.motif||""} onChange={e=>updLine(i,"motif",e.target.value)}/>
-          </div>
-        ))}
-
-        {lines.length<MAX_ADJ&&(
-          <button onClick={addLine} style={{width:"100%",background:"none",border:`1px dashed ${dark?"#3a3260":"#ddd"}`,borderRadius:10,padding:"9px",color:dark?"#8b86aa":"#aaa",cursor:"pointer",fontSize:13,marginBottom:12}}>
-            + Ajouter une ligne
-          </button>
-        )}
-
-        {totalAdj!==0&&(
-          <div style={{textAlign:"center",fontSize:15,fontWeight:700,color:totalAdj>0?"#f87171":"#4ade80",marginBottom:12}}>
-            Total ajustements : {totalAdj>0?"−":"+"}{m2h(Math.abs(totalAdj))} {totalAdj>0?"retiré du solde":"ajouté au solde"}
-          </div>
-        )}
-
-        <div style={S.modalFooter}>
-          <button style={{...S.saveBtn,background:dark?"#2a2a3a":"#eee",color:sub,fontSize:13}} onClick={()=>{onSave(yearMonth,[]);onClose();}}>Effacer tout</button>
-          <button style={S.saveBtn} onClick={handleSave}>Enregistrer</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── SUMMARY CARD ────────────────────────────────────────────────────────────
-function SummaryCard({rows,dark}){
-  return (
-    <div style={{...S.summaryCard,background:dark?"#16162a":"#f0f0f8"}}>
-      {rows.map((r,i)=>(
-        <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",fontSize:r.sep?15:13,color:dark?"#b0aac8":"#555",...(r.sep?{borderTop:`1px solid ${dark?"#2a2a3a":"#ddd"}`,marginTop:5,paddingTop:7}:{})}}>
-          <span>{r.label}</span>
-          <strong style={{color:r.color||(dark?"#f0eeff":"#1a1a2e")}}>{r.value}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-class SafeView extends React.Component {
-  constructor(props){ super(props); this.state={error:null}; }
-  componentDidCatch(err){ this.setState({error:err.message||String(err)}); }
-  static getDerivedStateFromError(err){ return {error:err.message||String(err)}; }
-  render(){
-    if(this.state.error) return (
-      <div style={{padding:20,color:"#f87171",fontSize:13,background:"#1a0a0a",margin:14,borderRadius:12,border:"1px solid #f87171"}}>
-        <div style={{fontWeight:700,marginBottom:8}}>Erreur vue {this.props.name} :</div>
-        <div style={{fontFamily:"monospace",wordBreak:"break-all"}}>{this.state.error}</div>
-      </div>
-    );
-    return this.props.children;
-  }
-}
-
-
-const nb = dark=>({...S.navBtn,background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7"});
-
-// ─── Calcul ajustements (nouveau format tableau) ──────────────────────────────
 function totalAdj(adjLines){
   if(!adjLines) return 0;
   var lines=Array.isArray(adjLines)?adjLines:Object.values(adjLines);
@@ -287,31 +66,236 @@ function totalAdj(adjLines){
   }
   return t;
 }
+function mainFields(single){ return single?["matin_debut","matin_fin"]:["matin_debut","matin_fin","soir_debut","soir_fin"]; }
+function nextMainIdx(e,single){
+  var f=mainFields(single||(e&&e.singlePeriod));
+  if(!e) return 0;
+  for(var i=0;i<f.length;i++) if(!e[f[i]]) return i;
+  return -1;
+}
+function nextPauseIdx(e){
+  if(!e) return null;
+  if(!e.pause_debut) return "debut";
+  if(!e.pause_fin) return "fin";
+  return null;
+}
+function getMainCreneaux(labels,single){
+  var p1=labels.p1||"Matin",p2=labels.p2||"Après-midi";
+  if(single) return [
+    {label:"Arrivée",field:"matin_debut",icon:"🌅",color:"#4ade80"},
+    {label:"Départ",field:"matin_fin",icon:"🌙",color:"#c4b8ff"},
+  ];
+  return [
+    {label:"Arrivée "+p1,field:"matin_debut",icon:"🌅",color:"#4ade80"},
+    {label:"Départ "+p1,field:"matin_fin",icon:"☀️",color:"#facc15"},
+    {label:"Arrivée "+p2,field:"soir_debut",icon:"🌆",color:"#60a5fa"},
+    {label:"Départ "+p2,field:"soir_fin",icon:"🌙",color:"#c4b8ff"},
+  ];
+}
+function nb(dark){ return {background:dark?"#1a1a28":"#eeeef6",color:dark?"#c4b8ff":"#6c5ce7",border:"none",width:34,height:34,borderRadius:8,fontSize:20,cursor:"pointer"}; }
+
+// ─── ERROR BOUNDARY ──────────────────────────────────────────────────────────
+class SafeView extends React.Component {
+  constructor(props){ super(props); this.state={error:null}; }
+  static getDerivedStateFromError(err){ return {error:err.message||String(err)}; }
+  componentDidCatch(err){ this.setState({error:err.message||String(err)}); }
+  render(){
+    if(this.state.error) return (
+      <div style={{padding:20,color:"#f87171",fontSize:13,background:"#1a0a0a",margin:14,borderRadius:12,border:"1px solid #f87171"}}>
+        <div style={{fontWeight:700,marginBottom:8}}>Erreur {this.props.name} :</div>
+        <div style={{fontFamily:"monospace",wordBreak:"break-all"}}>{this.state.error}</div>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+// ─── SUMMARY CARD ────────────────────────────────────────────────────────────
+function SummaryCard(props){
+  var rows=props.rows,dark=props.dark;
+  return (
+    <div style={{background:dark?"#16162a":"#f0f0f8",borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+      {rows.map(function(r,i){
+        return (
+          <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",fontSize:r.sep?15:13,color:dark?"#b0aac8":"#555",borderTop:r.sep?(dark?"1px solid #2a2a3a":"1px solid #ddd"):"none",marginTop:r.sep?5:0,paddingTop:r.sep?7:4}}>
+            <span>{r.label}</span>
+            <strong style={{color:r.color||(dark?"#f0eeff":"#1a1a2e")}}>{r.value}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── MODAL JOUR ──────────────────────────────────────────────────────────────
+function DayEditor(props){
+  var dkey=props.dkey,data=props.data,settings=props.settings,onSave=props.onSave,onDelete=props.onDelete,onClose=props.onClose;
+  var d=pk(dkey),labels=PRESETS[settings.preset]||PRESETS.matinapm;
+  var [loc,setLoc]=useState(Object.assign({},data[dkey]||{}));
+  var dark=settings.theme!=="light";
+  var single=!!loc.singlePeriod;
+  var pauseMin=calcPauses(loc,settings.paidBreak);
+  var total=calcJour(loc,settings.paidBreak);
+  var bg=dark?"#14142a":"#fff",fg=dark?"#e8e6f0":"#1a1a2e",sub=dark?"#8b86aa":"#888";
+  var iS={background:dark?"#0c0c14":"#f7f7fb",color:fg,border:"1px solid "+(dark?"#2a2a3a":"#ddd"),borderRadius:8,padding:"7px 10px",fontSize:13,width:"100%",boxSizing:"border-box"};
+
+  function setSpecial(t){ setLoc(function(p){ return p.special===t?{}:{special:t}; }); }
+  function upd(f,v){ setLoc(function(p){ var n=Object.assign({},p); delete n.special; if(v) n[f]=v; else delete n[f]; return n; }); }
+  function toggleSingle(){ setLoc(function(p){ var n=Object.assign({},p); n.singlePeriod=!p.singlePeriod; delete n.soir_debut; delete n.soir_fin; return n; }); }
+  function handleSave(){ var c=Object.assign({},loc); Object.keys(c).forEach(function(k){if(c[k]===undefined||c[k]==="")delete c[k];}); onSave(dkey,c); onClose(); }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:100,display:"flex",alignItems:"flex-end"}} onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:bg,color:fg,borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"18px 18px 32px",maxHeight:"92vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+          <div>
+            <div style={{fontSize:19,fontWeight:700,color:fg}}>{jNom(d)}</div>
+            <div style={{fontSize:12,color:sub,marginTop:2}}>{d.getDate()} {MOIS[d.getMonth()]} {d.getFullYear()}</div>
+          </div>
+          <button style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer"}} onClick={onClose}>✕</button>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          {Object.entries(TYPE_SPECIAL).map(function(kv){
+            var k=kv[0],v=kv[1];
+            return <button key={k} onClick={function(){setSpecial(k);}}
+              style={{flex:1,borderRadius:10,padding:"10px",fontSize:14,cursor:"pointer",fontWeight:600,background:dark?(loc.special===k?"#221e38":"#1a1a28"):(loc.special===k?"#ede9ff":"#f0f0f8"),color:dark?(loc.special===k?"#c4b8ff":"#b0aac8"):(loc.special===k?"#6c5ce7":"#555"),border:"1.5px solid "+(loc.special===k?"#c4b8ff":(dark?"#2a2a3a":"#ddd"))}}>{v}</button>;
+          })}
+        </div>
+        {!loc.special&&(
+          <div>
+            <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:13,color:sub,cursor:"pointer"}}>
+              <input type="checkbox" checked={single} onChange={toggleSingle} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+              ⏳ Journée en une seule période
+            </label>
+            <div style={{background:dark?"#1a1a28":"#f7f7fb",borderRadius:12,padding:"12px",marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",color:sub,marginBottom:8}}>🌅 {single?"Journée":labels.p1}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>Arrivée<input type="time" style={iS} value={loc.matin_debut||""} onChange={function(e){upd("matin_debut",e.target.value);}}/></label>
+                <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>Départ<input type="time" style={iS} value={loc.matin_fin||""} onChange={function(e){upd("matin_fin",e.target.value);}}/></label>
+              </div>
+            </div>
+            <div style={{background:dark?"#1a1a28":"#f7f7fb",borderRadius:12,padding:"12px",marginBottom:8,border:"1px solid "+(dark?"#2a2040":"#ffe8d6")}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",color:"#fb923c"}}>☕ Pause</div>
+                <span style={{fontSize:11,color:settings.paidBreak?"#4ade80":"#fb923c",fontWeight:600}}>{settings.paidBreak?"Payée":"Déduite"}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>Départ pause<input type="time" style={iS} value={loc.pause_debut||""} onChange={function(e){upd("pause_debut",e.target.value);}}/></label>
+                <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>Retour pause<input type="time" style={iS} value={loc.pause_fin||""} onChange={function(e){upd("pause_fin",e.target.value);}}/></label>
+              </div>
+              {pauseMin>0&&<div style={{fontSize:11,color:settings.paidBreak?"#4ade80":"#fb923c",marginTop:4}}>{settings.paidBreak?"Payée":"Déduite"} : {m2h(pauseMin)}</div>}
+            </div>
+            {!single&&(
+              <div style={{background:dark?"#1a1a28":"#f7f7fb",borderRadius:12,padding:"12px",marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",color:sub,marginBottom:8}}>🌆 {labels.p2}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>Arrivée<input type="time" style={iS} value={loc.soir_debut||""} onChange={function(e){upd("soir_debut",e.target.value);}}/></label>
+                  <label style={{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,color:sub}}>
+                    <span>Départ <span style={{fontSize:9,color:"#999"}}>†après minuit</span></span>
+                    <input type="text" placeholder="18:30 ou 25:30" style={iS} value={loc.soir_fin||""} onChange={function(e){upd("soir_fin",e.target.value);}}/>
+                  </label>
+                </div>
+              </div>
+            )}
+            {total>0&&<div style={{textAlign:"right",color:"#c4b8ff",fontSize:15,marginBottom:8,fontWeight:700}}>Total net : <strong>{m2h(total)}</strong>{pauseMin>0&&!settings.paidBreak&&<span style={{fontSize:11,color:"#fb923c",marginLeft:8}}>(pause {m2h(pauseMin)} déduite)</span>}</div>}
+          </div>
+        )}
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          {data[dkey]&&<button style={{background:"#2a1414",border:"1px solid #f87171",color:"#f87171",borderRadius:12,padding:"13px 14px",fontSize:14,cursor:"pointer",fontWeight:600}} onClick={function(){onDelete(dkey);onClose();}}>Supprimer</button>}
+          <button style={{flex:1,background:"#c4b8ff",color:"#0c0c14",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer"}} onClick={handleSave}>Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODAL AJUSTEMENTS ───────────────────────────────────────────────────────
+function AjustModal(props){
+  var yearMonth=props.yearMonth,adjustments=props.adjustments,onSave=props.onSave,onClose=props.onClose,dark=props.dark;
+  var existing=Array.isArray(adjustments[yearMonth])?adjustments[yearMonth]:[];
+  var empty={signe:"-",heures:0,mins:0,motif:""};
+  var [lines,setLines]=useState(existing.length>0?existing:[Object.assign({},empty)]);
+  var bg=dark?"#14142a":"#fff",fg=dark?"#e8e6f0":"#1a1a2e",sub=dark?"#8b86aa":"#888";
+  var iS={background:dark?"#0c0c14":"#f7f7fb",color:fg,border:"1px solid "+(dark?"#2a2a3a":"#ddd"),borderRadius:8,padding:"7px 10px",fontSize:13,width:"100%",boxSizing:"border-box"};
+
+  function updLine(i,f,v){ setLines(function(p){ return p.map(function(l,idx){ return idx===i?Object.assign({},l,{[f]:v}):l; }); }); }
+  function addLine(){ if(lines.length<5) setLines(function(p){ return p.concat([Object.assign({},empty)]); }); }
+  function delLine(i){ setLines(function(p){ return p.filter(function(_,idx){ return idx!==i; }); }); }
+
+  var totalAdjVal=lines.reduce(function(a,l){ return a+(Math.abs(l.heures||0)*60+Math.abs(l.mins||0))*(l.signe==="-"?1:-1); },0);
+
+  function handleSave(){
+    var clean=lines.filter(function(l){ return (l.heures||0)+(l.mins||0)>0; });
+    onSave(yearMonth,clean); onClose();
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:200,display:"flex",alignItems:"flex-end"}} onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:bg,color:fg,borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"18px 18px 32px",maxHeight:"92vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{fontSize:17,fontWeight:700,color:fg}}>⚖️ Ajustements du solde</div>
+          <button style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer"}} onClick={onClose}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:sub,marginBottom:14}}>Heures récupérées ou payées (−) déduites du solde. Heures bonus (+) ajoutées.</div>
+        {lines.map(function(l,i){
+          return (
+            <div key={i} style={{background:dark?"#1a1a28":"#f7f7fb",borderRadius:12,padding:"10px 12px",marginBottom:8,border:"1px solid "+(dark?"#2a2a3a":"#eee")}}>
+              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                <select value={l.signe} onChange={function(e){updLine(i,"signe",e.target.value);}}
+                  style={{background:dark?"#0c0c14":"#f7f7fb",color:fg,border:"1px solid "+(dark?"#2a2a3a":"#ddd"),borderRadius:8,width:54,textAlign:"center",fontSize:18,fontWeight:700,padding:"6px 4px"}}>
+                  <option value="-">−</option>
+                  <option value="+">+</option>
+                </select>
+                <input type="number" min="0" max="999" placeholder="0" style={Object.assign({},iS,{flex:1,textAlign:"center"})} value={l.heures||""} onChange={function(e){updLine(i,"heures",Number(e.target.value));}}/>
+                <span style={{color:sub,fontSize:13}}>h</span>
+                <input type="number" min="0" max="59" placeholder="0" style={Object.assign({},iS,{flex:1,textAlign:"center"})} value={l.mins||""} onChange={function(e){updLine(i,"mins",Number(e.target.value));}}/>
+                <span style={{color:sub,fontSize:13}}>min</span>
+                <button onClick={function(){delLine(i);}} style={{background:"none",border:"none",color:"#f87171",fontSize:18,cursor:"pointer",padding:"0 4px"}}>✕</button>
+              </div>
+              <input type="text" placeholder="Motif (ex. Heures sup payées)" style={iS} value={l.motif||""} onChange={function(e){updLine(i,"motif",e.target.value);}}/>
+            </div>
+          );
+        })}
+        {lines.length<5&&<button onClick={addLine} style={{width:"100%",background:"none",border:"1px dashed "+(dark?"#3a3260":"#ddd"),borderRadius:10,padding:"9px",color:dark?"#8b86aa":"#aaa",cursor:"pointer",fontSize:13,marginBottom:12}}>+ Ajouter une ligne</button>}
+        {totalAdjVal!==0&&<div style={{textAlign:"center",fontSize:15,fontWeight:700,color:totalAdjVal>0?"#f87171":"#4ade80",marginBottom:12}}>{totalAdjVal>0?"−":"+"}{m2h(Math.abs(totalAdjVal))} {totalAdjVal>0?"retiré du solde":"ajouté au solde"}</div>}
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button style={{flex:1,background:dark?"#2a2a3a":"#eee",color:sub,border:"none",borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={function(){onSave(yearMonth,[]);onClose();}}>Effacer tout</button>
+          <button style={{flex:1,background:"#c4b8ff",color:"#0c0c14",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer"}} onClick={handleSave}>Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── VUE SEMAINE ─────────────────────────────────────────────────────────────
-function VueSemaine({cur,setCur,data,settings,setEdit}){
-  const today=new Date(),todayKey=dk(today),days=wkDays(cur,settings.firstDay);
-  const total=days.reduce((a,d)=>a+calcJour(data[dk(d)],settings.paidBreak),0);
-  const solde=total-settings.heuresHebdo*60;
-  const dark=settings.theme!=="light",ws=days[0],we=days[6];
+function VueSemaine(props){
+  var cur=props.cur,setCur=props.setCur,data=props.data,settings=props.settings,setEdit=props.setEdit;
+  var today=new Date(),todayKey=dk(today);
+  var fd=Number(settings.firstDay)||1;
+  var days=wkDays(cur,fd);
+  var total=0;
+  for(var i=0;i<days.length;i++) total+=calcJour(data[dk(days[i])],settings.paidBreak);
+  var solde=total-Number(settings.heuresHebdo)*60;
+  var dark=settings.theme!=="light";
+  var ws=days[0],we=days[6];
   return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(d.getDate()-7);setCur(d);}}>‹</button>
-        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{ws.getDate()} {MOIS[ws.getMonth()].slice(0,3)} – {we.getDate()} {MOIS[we.getMonth()].slice(0,3)} {we.getFullYear()}</div>
-        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(d.getDate()+7);setCur(d);}}>›</button>
+    <div style={{padding:"14px 14px 0"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setDate(d.getDate()-7);setCur(d);}}>‹</button>
+        <div style={{fontSize:14,fontWeight:600,color:dark?"#f0eeff":"#1a1a2e"}}>{ws.getDate()} {MOIS[ws.getMonth()].slice(0,3)} – {we.getDate()} {MOIS[we.getMonth()].slice(0,3)} {we.getFullYear()}</div>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setDate(d.getDate()+7);setCur(d);}}>›</button>
       </div>
-      <div style={S.daysGrid}>
-        {days.map(d=>{
-          const dkk=dk(d),e=data[dkk],mins=calcJour(e,settings.paidBreak),isToday=dkk===todayKey,isSp=e?.special;
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5,marginBottom:14}}>
+        {days.map(function(d){
+          var dkk=dk(d),e=data[dkk],mins=calcJour(e,settings.paidBreak),isToday=dkk===todayKey,isSp=e&&e.special;
           return (
-            <div key={dkk} onClick={()=>setEdit(dkk)}
-              style={{...S.dayCard,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSp?{background:dark?"#1c1616":"#fff5f5"}:{})}}>
+            <div key={dkk} onClick={function(){setEdit(dkk);}}
+              style={{background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:"1.5px solid "+(isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"),borderRadius:10,padding:"9px 3px",textAlign:"center",cursor:"pointer"}}>
               <div style={{fontSize:9,color:dark?"#8b86aa":"#aaa",marginBottom:3,fontWeight:700,textTransform:"uppercase"}}>{jCourt(d)}</div>
               <div style={{fontSize:17,fontWeight:700,color:dark?"#f0eeff":"#1a1a2e",lineHeight:1}}>{d.getDate()}</div>
-              {isSp?<div style={S.specialTag}>{e.special==="repos"?"R":"F"}</div>
-               :mins>0?<div style={S.dayHours}>{m2h(mins)}</div>
-               :e&&!isSp?<div style={{...S.dayHours,color:"#facc15"}}>…</div>
+              {isSp?<div style={{fontSize:9,color:"#f59e42",marginTop:3,fontWeight:700}}>{e.special==="repos"?"R":"F"}</div>
+               :mins>0?<div style={{fontSize:9,color:"#c4b8ff",marginTop:3,fontWeight:700}}>{m2h(mins)}</div>
+               :e?<div style={{fontSize:9,color:"#facc15",marginTop:3}}>…</div>
                :<div style={{fontSize:10,color:dark?"#2e2e44":"#ccc",marginTop:3}}>—</div>}
             </div>
           );
@@ -319,7 +303,7 @@ function VueSemaine({cur,setCur,data,settings,setEdit}){
       </div>
       <SummaryCard dark={dark} rows={[
         {label:"Total semaine",value:m2h(total)},
-        {label:"Forfait",value:`${settings.heuresHebdo}h00`},
+        {label:"Forfait",value:settings.heuresHebdo+"h00"},
         {label:"Solde semaine",value:(solde>=0?"+":"")+m2h(solde),color:solde>=0?"#4ade80":"#f87171",sep:true},
       ]}/>
     </div>
@@ -327,80 +311,83 @@ function VueSemaine({cur,setCur,data,settings,setEdit}){
 }
 
 // ─── VUE MOIS ────────────────────────────────────────────────────────────────
-function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,saveAll}){
-  const today=new Date(),todayKey=dk(today),y=cur.getFullYear(),mo=cur.getMonth();
-  const ym=y+"-"+String(mo+1).padStart(2,"0");
-  const dark=settings.theme!=="light";
-  const [showAdj,setShowAdj]=useState(false);
-  const fd=Number(settings.firstDay)||1;
-  const hebdo=Number(settings.heuresHebdo)||35;
+function VueMois(props){
+  var cur=props.cur,setCur=props.setCur,data=props.data,settings=props.settings,setEdit=props.setEdit;
+  var adjustments=props.adjustments,setAdjustments=props.setAdjustments,saveAll=props.saveAll;
+  var today=new Date(),todayKey=dk(today);
+  var y=cur.getFullYear(),mo=cur.getMonth();
+  var ym=y+"-"+String(mo+1).padStart(2,"0");
+  var dark=settings.theme!=="light";
+  var fd=Number(settings.firstDay)||1;
+  var hebdo=Number(settings.heuresHebdo)||35;
+  var [showAdj,setShowAdj]=useState(false);
+  var allKeys=Object.keys(data);
 
-  let total=0;
-  const allKeys=Object.keys(data);
-  for(let i=0;i<allKeys.length;i++){
-    const dd=pk(allKeys[i]);
+  var total=0;
+  for(var i=0;i<allKeys.length;i++){
+    var dd=pk(allKeys[i]);
     if(dd.getFullYear()===y&&dd.getMonth()===mo) total+=calcJour(data[allKeys[i]],settings.paidBreak);
   }
+  var dim=new Date(y,mo+1,0).getDate();
+  var firstDayOff=((new Date(y,mo,1).getDay()-fd)+7)%7;
+  var sem=Math.ceil((dim+firstDayOff)/7);
+  var forfait=hebdo*60*sem;
+  var adjLines=Array.isArray(adjustments[ym])?adjustments[ym]:[];
+  var adjMin=totalAdj(adjLines);
+  var soldeMois=total-forfait;
+  var soldeMoisNet=soldeMois-adjMin;
 
-  const dim=new Date(y,mo+1,0).getDate();
-  const firstDayOff=((new Date(y,mo,1).getDay()-fd)+7)%7;
-  const sem=Math.ceil((dim+firstDayOff)/7);
-  const forfait=hebdo*60*sem;
-  const adjLines=Array.isArray(adjustments[ym])?adjustments[ym]:[];
-  const adjMin=totalAdj(adjLines);
-  const soldeMois=total-forfait;
-  const soldeMoisNet=soldeMois-adjMin;
-
-  let totY=0,forfY=0,adjY=0;
-  for(let i=0;i<=mo;i++){
-    const d1=new Date(y,i,1);
-    const d2=new Date(y,i+1,0);
-    const off=((d1.getDay()-fd)+7)%7;
+  var totY=0,forfY=0,adjY=0;
+  for(var mi=0;mi<=mo;mi++){
+    var d1=new Date(y,mi,1),d2=new Date(y,mi+1,0);
+    var off=((d1.getDay()-fd)+7)%7;
     forfY+=hebdo*60*Math.ceil((d2.getDate()+off)/7);
-    const ymk=y+"-"+String(i+1).padStart(2,"0");
-    adjY+=totalAdj(adjustments[ymk]||[]);
-    for(let j=0;j<allKeys.length;j++){
-      const dd=pk(allKeys[j]);
-      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[allKeys[j]],settings.paidBreak);
+    adjY+=totalAdj(adjustments[y+"-"+String(mi+1).padStart(2,"0")]||[]);
+    for(var ki=0;ki<allKeys.length;ki++){
+      var ddi=pk(allKeys[ki]);
+      if(ddi.getFullYear()===y&&ddi.getMonth()===mi) totY+=calcJour(data[allKeys[ki]],settings.paidBreak);
     }
   }
-  const soldeY=totY-forfY-adjY;
+  var soldeY=totY-forfY-adjY;
 
-  const cells=[];
-  for(let i=0;i<firstDayOff;i++) cells.push(null);
-  for(let i=1;i<=dim;i++) cells.push(new Date(y,mo,i));
-  const joursH=[];
-  for(let i=0;i<7;i++) joursH.push(JOURS_FULL[((fd-1)+i)%7].slice(0,3));
+  var cells=[];
+  for(var ci=0;ci<firstDayOff;ci++) cells.push(null);
+  for(var di=1;di<=dim;di++) cells.push(new Date(y,mo,di));
+  var joursH=[];
+  for(var ji=0;ji<7;ji++) joursH.push(JOURS_FULL[((fd-1)+ji)%7].slice(0,3));
 
-  const handleSaveAdj=(ym,val)=>{ const na={...adjustments,[ym]:val}; setAdjustments(na); saveAll(data,settings,na); };
-
-  const summaryRows=[
+  var summaryRows=[
     {label:"Total mois",value:m2h(total)},
-    {label:`Forfait (${sem} sem.)`,value:m2h(forfait)},
+    {label:"Forfait ("+sem+" sem.)",value:m2h(forfait)},
     {label:"Solde brut",value:(soldeMois>=0?"+":"")+m2h(soldeMois),color:soldeMois>=0?"#4ade80":"#f87171",sep:true},
-    ...adjLines.filter(l=>(l.heures||0)+(l.mins||0)>0).map(l=>{
-      const m=(Math.abs(l.heures||0)*60+Math.abs(l.mins||0))*(l.signe==="-"?1:-1);
-      return {label:l.motif||"Ajustement",value:(m>0?"−":"+")+m2h(Math.abs(m)),color:"#fb923c"};
-    }),
-    ...(adjMin!==0?[{label:"Solde net mois",value:(soldeMoisNet>=0?"+":"")+m2h(soldeMoisNet),color:soldeMoisNet>=0?"#4ade80":"#f87171",sep:true}]:[]),
-    {label:"Solde cumulé année",value:(soldeY>=0?"+":"")+m2h(soldeY),color:soldeY>=0?"#4ade80":"#f87171",sep:adjMin===0},
   ];
+  for(var ai=0;ai<adjLines.length;ai++){
+    var al=adjLines[ai];
+    if((al.heures||0)+(al.mins||0)>0){
+      var am=(Math.abs(al.heures||0)*60+Math.abs(al.mins||0))*(al.signe==="-"?1:-1);
+      summaryRows.push({label:al.motif||"Ajustement",value:(am>0?"−":"+")+m2h(Math.abs(am)),color:"#fb923c"});
+    }
+  }
+  if(adjMin!==0) summaryRows.push({label:"Solde net mois",value:(soldeMoisNet>=0?"+":"")+m2h(soldeMoisNet),color:soldeMoisNet>=0?"#4ade80":"#f87171",sep:true});
+  summaryRows.push({label:"Solde cumulé année",value:(soldeY>=0?"+":"")+m2h(soldeY),color:soldeY>=0?"#4ade80":"#f87171",sep:adjMin===0});
+
+  function handleSaveAdj(ym,val){ var na=Object.assign({},adjustments,{[ym]:val}); setAdjustments(na); saveAll(data,settings,na); }
 
   return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()-1);setCur(d);}}>‹</button>
-        <div style={{...S.navTitle,color:dark?"#f0eeff":"#1a1a2e"}}>{MOIS[mo]} {y}</div>
-        <button style={nb(dark)} onClick={()=>{const d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()+1);setCur(d);}}>›</button>
+    <div style={{padding:"14px 14px 0"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()-1);setCur(d);}}>‹</button>
+        <div style={{fontSize:14,fontWeight:600,color:dark?"#f0eeff":"#1a1a2e"}}>{MOIS[mo]} {y}</div>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setDate(1);d.setMonth(d.getMonth()+1);setCur(d);}}>›</button>
       </div>
-      <div style={S.calGrid}>
-        {joursH.map(j=><div key={j} style={{textAlign:"center",fontSize:10,fontWeight:700,padding:"3px 0",textTransform:"uppercase",color:dark?"#8b86aa":"#aaa"}}>{j}</div>)}
-        {cells.map((d,i)=>{
-          if(!d) return <div key={`e${i}`}/>;
-          const dkk=dk(d),e=data[dkk],mins=calcJour(e,settings.paidBreak),isToday=dkk===todayKey,isSp=e?.special;
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:14}}>
+        {joursH.map(function(j){ return <div key={j} style={{textAlign:"center",fontSize:10,fontWeight:700,padding:"3px 0",textTransform:"uppercase",color:dark?"#8b86aa":"#aaa"}}>{j}</div>; })}
+        {cells.map(function(d,i){
+          if(!d) return <div key={"e"+i}/>;
+          var dkk=dk(d),e=data[dkk],mins=calcJour(e,settings.paidBreak),isToday=dkk===todayKey,isSp=e&&e.special;
           return (
-            <div key={dkk} onClick={()=>setEdit(dkk)}
-              style={{...S.calCell,background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:`1.5px solid ${isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"}`,...(isSp?{background:dark?"#1c1616":"#fff5f5"}:{})}}>
+            <div key={dkk} onClick={function(){setEdit(dkk);}}
+              style={{background:dark?(isToday?"#1e1c36":"#16162a"):(isToday?"#ede9ff":"#f7f7fb"),border:"1.5px solid "+(isToday?(dark?"#c4b8ff":"#9b8de8"):"transparent"),borderRadius:7,padding:"5px 3px",textAlign:"center",cursor:"pointer",minHeight:44}}>
               <div style={{fontSize:12,fontWeight:600,color:dark?"#f0eeff":"#1a1a2e"}}>{d.getDate()}</div>
               {isSp?<div style={{fontSize:10,color:"#f59e42",fontWeight:700}}>{e.special==="repos"?"R":"F"}</div>:mins>0?<div style={{fontSize:9,color:"#c4b8ff",marginTop:2}}>{m2h(mins)}</div>:null}
             </div>
@@ -408,78 +395,58 @@ function VueMois({cur,setCur,data,settings,setEdit,adjustments,setAdjustments,sa
         })}
       </div>
       <SummaryCard dark={dark} rows={summaryRows}/>
-      <button onClick={()=>setShowAdj(true)}
-        style={{width:"100%",background:dark?"#1a1a28":"#f0f0f8",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`,borderRadius:10,padding:"10px",fontSize:13,color:dark?"#fb923c":"#b45309",cursor:"pointer",fontWeight:600,marginBottom:14}}>
-        ⚖️ Ajuster le solde {adjLines.filter(l=>(l.heures||0)+(l.mins||0)>0).length>0?`(${adjLines.filter(l=>(l.heures||0)+(l.mins||0)>0).length} ajustement(s))`:""}
+      <button onClick={function(){setShowAdj(true);}}
+        style={{width:"100%",background:dark?"#1a1a28":"#f0f0f8",border:"1px solid "+(dark?"#2a2a3a":"#ddd"),borderRadius:10,padding:"10px",fontSize:13,color:dark?"#fb923c":"#b45309",cursor:"pointer",fontWeight:600,marginBottom:14}}>
+        ⚖️ Ajuster le solde {adjLines.filter(function(l){return(l.heures||0)+(l.mins||0)>0;}).length>0?"("+adjLines.filter(function(l){return(l.heures||0)+(l.mins||0)>0;}).length+" ajustement(s))":""}
       </button>
-      {showAdj&&<AjustModal yearMonth={ym} adjustments={adjustments} onSave={handleSaveAdj} onClose={()=>setShowAdj(false)} dark={dark}/>}
+      {showAdj&&<AjustModal yearMonth={ym} adjustments={adjustments} onSave={handleSaveAdj} onClose={function(){setShowAdj(false);}} dark={dark}/>}
     </div>
   );
 }
 
 // ─── VUE ANNÉE ───────────────────────────────────────────────────────────────
-function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
-  const y = cur.getFullYear(), dark = settings.theme !== "light";
-  const allKeys = Object.keys(data); // <-- ajouté
-
-  let totY = 0, forfY = 0, adjY = 0;
-  for (let i = 0; i < 12; i++) {
-    const d1 = new Date(y, i, 1), d2 = new Date(y, i + 1, 0);
-    forfY += settings.heuresHebdo * 60 *
-      Math.ceil((d2.getDate() + ((d1.getDay() - settings.firstDay + 7) % 7)) / 7);
-    adjY += totalAdj(adjustments[y + "-" + String(i + 1).padStart(2, "0")] || []);
-
-    for (let j = 0; j < allKeys.length; j++) {
-      const dd = pk(allKeys[j]);
-      if (dd.getFullYear() === y && dd.getMonth() === i) {
-        totY += calcJour(data[allKeys[j]], settings.paidBreak);
-      }
+function VueAnnee(props){
+  var cur=props.cur,setCur=props.setCur,data=props.data,settings=props.settings,setCurAndView=props.setCurAndView,adjustments=props.adjustments;
+  var y=cur.getFullYear(),dark=settings.theme!=="light";
+  var fd=Number(settings.firstDay)||1;
+  var hebdo=Number(settings.heuresHebdo)||35;
+  var allKeys=Object.keys(data);
+  var totY=0,forfY=0,adjY=0;
+  for(var i=0;i<12;i++){
+    var d1=new Date(y,i,1),d2=new Date(y,i+1,0);
+    var off=((d1.getDay()-fd)+7)%7;
+    forfY+=hebdo*60*Math.ceil((d2.getDate()+off)/7);
+    adjY+=totalAdj(adjustments[y+"-"+String(i+1).padStart(2,"0")]||[]);
+    for(var j=0;j<allKeys.length;j++){
+      var dd=pk(allKeys[j]);
+      if(dd.getFullYear()===y&&dd.getMonth()===i) totY+=calcJour(data[allKeys[j]],settings.paidBreak);
     }
   }
-  const solde = totY - forfY - adjY;
-
+  var solde=totY-forfY-adjY;
   return (
-    <div style={S.viewContainer}>
-      <div style={S.navRow}>
-        <button style={nb(dark)} onClick={() => {
-          const d = new Date(cur);
-          d.setFullYear(d.getFullYear() - 1);
-          setCur(d);
-        }}>‹</button>
-        <div style={{...S.navTitle, color: dark ? "#f0eeff" : "#1a1a2e"}}>{y}</div>
-        <button style={nb(dark)} onClick={() => {
-          const d = new Date(cur);
-          d.setFullYear(d.getFullYear() + 1);
-          setCur(d);
-        }}>›</button>
+    <div style={{padding:"14px 14px 0"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setFullYear(d.getFullYear()-1);setCur(d);}}>‹</button>
+        <div style={{fontSize:14,fontWeight:600,color:dark?"#f0eeff":"#1a1a2e"}}>{y}</div>
+        <button style={nb(dark)} onClick={function(){var d=new Date(cur);d.setFullYear(d.getFullYear()+1);setCur(d);}}>›</button>
       </div>
-      <div style={S.moisGrid}>
-        {MOIS.map(function(m, i){
-          let tot = 0, jj = 0;
-          for (let j = 0; j < allKeys.length; j++) {
-            const dd = pk(allKeys[j]);
-            if (dd.getFullYear() === y && dd.getMonth() === i) {
-              const v = calcJour(data[allKeys[j]], settings.paidBreak);
-              tot += v;
-              if (!data[allKeys[j]].special && v > 0) jj++;
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:14}}>
+        {MOIS.map(function(m,i){
+          var tot=0,jj=0;
+          for(var j=0;j<allKeys.length;j++){
+            var dd=pk(allKeys[j]);
+            if(dd.getFullYear()===y&&dd.getMonth()===i){
+              var v=calcJour(data[allKeys[j]],settings.paidBreak);
+              tot+=v;
+              if(!data[allKeys[j]].special&&v>0) jj++;
             }
           }
-          const hasAdj = (adjustments[y + "-" + String(i + 1).padStart(2, "0")] || [])
-            .filter(function(l){ return (l.heures || 0) + (l.mins || 0) > 0; }).length > 0;
+          var hasAdj=Array.isArray(adjustments[y+"-"+String(i+1).padStart(2,"0")])&&adjustments[y+"-"+String(i+1).padStart(2,"0")].filter(function(l){return(l.heures||0)+(l.mins||0)>0;}).length>0;
           return (
-            <div key={m}
-              style={{...S.moisCard, background: dark ? "#16162a" : "#f7f7fb"}}
-              onClick={() => setCurAndView(new Date(y, i, 1), "mois")}>
-              <div style={{
-                fontSize:10,fontWeight:700,textTransform:"uppercase",
-                marginBottom:3,color:dark?"#8b86aa":"#aaa"
-              }}>
-                {m.slice(0,3)}
-              </div>
+            <div key={m} style={{background:dark?"#16162a":"#f7f7fb",borderRadius:10,padding:"11px 6px",textAlign:"center",cursor:"pointer"}} onClick={function(){setCurAndView(new Date(y,i,1),"mois");}}>
+              <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",marginBottom:3,color:dark?"#8b86aa":"#aaa"}}>{m.slice(0,3)}</div>
               <div style={{fontSize:15,fontWeight:700,color:"#c4b8ff"}}>{m2h(tot)}</div>
-              <div style={{fontSize:10,marginTop:2,color:dark?"#8b86aa":"#aaa"}}>
-                {jj}j{hasAdj ? <span style={{color:"#fb923c"}}>*</span> : ""}
-              </div>
+              <div style={{fontSize:10,marginTop:2,color:dark?"#8b86aa":"#aaa"}}>{jj}j{hasAdj?<span style={{color:"#fb923c"}}>*</span>:""}</div>
             </div>
           );
         })}
@@ -488,104 +455,103 @@ function VueAnnee({cur,setCur,data,settings,setCurAndView,adjustments}){
         {label:"Total année",value:m2h(totY)},
         {label:"Forfait annuel",value:m2h(forfY)},
         {label:"Ajustements",value:(adjY>0?"−":"+")+m2h(Math.abs(adjY)),color:"#fb923c"},
-        {label:"Solde net année",value:(solde>=0?"+":"")+m2h(solde),
-         color:solde>=0?"#4ade80":"#f87171",sep:true},
+        {label:"Solde net année",value:(solde>=0?"+":"")+m2h(solde),color:solde>=0?"#4ade80":"#f87171",sep:true},
       ]}/>
     </div>
   );
 }
 
 // ─── VUE PARAMÈTRES ──────────────────────────────────────────────────────────
-function VueSettings({settings,updateSettings,exportCSV,exportPDF,exportJSON,importJSON,resetData,showToast}){
-  const [loc,setLoc]=useState({...settings});
-  const fileRef=useRef();
-  const dark=settings.theme!=="light";
-  const iS={...S.tInput,background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:`1px solid ${dark?"#2a2a3a":"#ddd"}`};
-  const sec={...S.settingsSection,background:dark?"#16162a":"#f0f0f8"};
-  const ttl={...S.settingsTitle,color:dark?"#f0eeff":"#1a1a2e"};
-  const lbl={...S.settingsLabel,color:dark?"#8b86aa":"#777"};
-  const expBtn=(c)=>({...S.exportBtn,background:dark?"#1a1a28":"#eeeef6",color:c||(dark?"#c4b8ff":"#6c5ce7"),border:`1px solid ${dark?"#2a2a3a":"#ddd"}`});
-  const JOURS_S=["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
-  const [notifPerm,setNotifPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"unsupported");
+function VueSettings(props){
+  var settings=props.settings,updateSettings=props.updateSettings,exportCSV=props.exportCSV;
+  var exportPDF=props.exportPDF,exportJSON=props.exportJSON,importJSON=props.importJSON;
+  var resetData=props.resetData,showToast=props.showToast;
+  var [loc,setLoc]=useState(Object.assign({},settings));
+  var fileRef=useRef();
+  var dark=settings.theme!=="light";
+  var iS={background:dark?"#0c0c14":"#fff",color:dark?"#f0eeff":"#1a1a2e",border:"1px solid "+(dark?"#2a2a3a":"#ddd"),borderRadius:8,padding:"9px 11px",fontSize:14,width:"100%",boxSizing:"border-box"};
+  var sec={background:dark?"#16162a":"#f0f0f8",borderRadius:12,padding:"14px",marginBottom:10};
+  var ttl={fontSize:14,fontWeight:700,marginBottom:12,color:dark?"#f0eeff":"#1a1a2e"};
+  var lbl={display:"flex",flexDirection:"column",gap:5,fontSize:13,fontWeight:600,marginBottom:12,color:dark?"#8b86aa":"#777"};
+  var [notifPerm,setNotifPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"unsupported");
+  var JOURS_S=["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
 
-  const reqNotif=async()=>{
-    if(typeof Notification==="undefined"){showToast("Non supporté");return;}
-    const p=await Notification.requestPermission(); setNotifPerm(p);
-    p==="granted"?showToast("Notifications activées ✓"):showToast("Permission refusée");
-  };
+  function expBtn(c){ return {width:"100%",borderRadius:10,padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600,background:dark?"#1a1a28":"#eeeef6",color:c||(dark?"#c4b8ff":"#6c5ce7"),border:"1px solid "+(dark?"#2a2a3a":"#ddd"),marginBottom:0}; }
 
   return (
-    <div style={S.viewContainer}>
+    <div style={{padding:"14px 14px 0"}}>
       <div style={sec}>
         <div style={ttl}>⚙️ Paramètres généraux</div>
-        <label style={lbl}>Prénom / Nom<input style={iS} value={loc.nom||""} onChange={e=>setLoc({...loc,nom:e.target.value})} placeholder="ex. Thomas"/></label>
-        <label style={lbl}>Forfait hebdomadaire (h)<input style={iS} type="number" min="1" max="80" value={loc.heuresHebdo} onChange={e=>setLoc({...loc,heuresHebdo:Number(e.target.value)})}/></label>
+        <label style={lbl}>Prénom / Nom<input style={iS} value={loc.nom||""} onChange={function(e){setLoc(Object.assign({},loc,{nom:e.target.value}));}} placeholder="ex. Thomas"/></label>
+        <label style={lbl}>Forfait hebdomadaire (h)<input style={iS} type="number" min="1" max="80" value={loc.heuresHebdo} onChange={function(e){setLoc(Object.assign({},loc,{heuresHebdo:Number(e.target.value)}));}}/></label>
         <label style={lbl}>Premier jour de la semaine
-          <select style={{...iS,padding:"9px 11px"}} value={loc.firstDay} onChange={e=>setLoc({...loc,firstDay:Number(e.target.value)})}>
-            {JOURS_S.map((j,i)=><option key={i} value={(i+1)%7===0?7:(i+1)}>{j}</option>)}
+          <select style={iS} value={loc.firstDay} onChange={function(e){setLoc(Object.assign({},loc,{firstDay:Number(e.target.value)}));}}>
+            {JOURS_S.map(function(j,i){ return <option key={i} value={(i+1)%7===0?7:(i+1)}>{j}</option>; })}
           </select>
         </label>
         <label style={lbl}>Noms des périodes
-          <select style={{...iS,padding:"9px 11px"}} value={loc.preset||"matinapm"} onChange={e=>setLoc({...loc,preset:e.target.value})}>
+          <select style={iS} value={loc.preset||"matinapm"} onChange={function(e){setLoc(Object.assign({},loc,{preset:e.target.value}));}}>
             <option value="matinapm">Matin / Après-midi</option>
             <option value="matinsoir">Matin / Soir</option>
           </select>
         </label>
         <label style={lbl}>Arrondi automatique
-          <select style={{...iS,padding:"9px 11px"}} value={loc.roundMin||0} onChange={e=>setLoc({...loc,roundMin:Number(e.target.value)})}>
-            {ROUND_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+          <select style={iS} value={loc.roundMin||0} onChange={function(e){setLoc(Object.assign({},loc,{roundMin:Number(e.target.value)}));}}>
+            {ROUND_OPTS.map(function(o){ return <option key={o.v} value={o.v}>{o.l}</option>; })}
           </select>
         </label>
         <label style={lbl}>Pause
-          <select style={{...iS,padding:"9px 11px"}} value={loc.paidBreak?"paid":"deducted"} onChange={e=>setLoc({...loc,paidBreak:e.target.value==="paid"})}>
+          <select style={iS} value={loc.paidBreak?"paid":"deducted"} onChange={function(e){setLoc(Object.assign({},loc,{paidBreak:e.target.value==="paid"}));}}>
             <option value="deducted">Déduite du temps de travail</option>
             <option value="paid">Payée (non déduite)</option>
           </select>
         </label>
         <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:dark?"#8b86aa":"#777",marginBottom:12,cursor:"pointer"}}>
-          <input type="checkbox" checked={!!loc.singlePeriodDefault} onChange={e=>setLoc({...loc,singlePeriodDefault:e.target.checked})} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+          <input type="checkbox" checked={!!loc.singlePeriodDefault} onChange={function(e){setLoc(Object.assign({},loc,{singlePeriodDefault:e.target.checked}));}} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
           ⏳ Période unique par défaut
         </label>
         <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:dark?"#8b86aa":"#777",marginBottom:14,cursor:"pointer"}}>
-          <input type="checkbox" checked={loc.theme==="light"} onChange={e=>setLoc({...loc,theme:e.target.checked?"light":"dark"})} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
+          <input type="checkbox" checked={loc.theme==="light"} onChange={function(e){setLoc(Object.assign({},loc,{theme:e.target.checked?"light":"dark"}));}} style={{width:16,height:16,accentColor:"#c4b8ff"}}/>
           ☀️ Thème clair
         </label>
-        <button style={S.saveBtn} onClick={()=>{updateSettings(loc);showToast("Paramètres enregistrés ✓");}}>Enregistrer</button>
+        <button style={{flex:1,background:"#c4b8ff",color:"#0c0c14",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer",width:"100%"}} onClick={function(){updateSettings(loc);showToast("Paramètres enregistrés ✓");}}>Enregistrer</button>
       </div>
-
       <div style={sec}>
-        <div style={ttl}>🔔 Notifications de rappel</div>
+        <div style={ttl}>🔔 Notifications</div>
         <div style={{fontSize:12,color:dark?"#666":"#aaa",marginBottom:10}}>Rappels configurables. Non garanti en veille sur iOS.</div>
         {notifPerm!=="granted"?(
-          <button style={expBtn(dark?"#facc15":"#b45309")} onClick={reqNotif}>Activer les notifications</button>
+          <button style={expBtn(dark?"#facc15":"#b45309")} onClick={async function(){
+            if(typeof Notification==="undefined"){showToast("Non supporté");return;}
+            var p=await Notification.requestPermission(); setNotifPerm(p);
+            p==="granted"?showToast("Notifications activées ✓"):showToast("Permission refusée");
+          }}>Activer les notifications</button>
         ):(
-          <>
+          <div>
             <div style={{fontSize:12,color:"#4ade80",marginBottom:10}}>✓ Notifications autorisées</div>
-            <label style={lbl}>Rappel matin (heure)<input type="time" style={iS} value={loc.notifMatin||""} onChange={e=>setLoc({...loc,notifMatin:e.target.value})}/></label>
-            <label style={lbl}>Rappel soir (heure)<input type="time" style={iS} value={loc.notifSoir||""} onChange={e=>setLoc({...loc,notifSoir:e.target.value})}/></label>
+            <label style={lbl}>Rappel matin<input type="time" style={iS} value={loc.notifMatin||""} onChange={function(e){setLoc(Object.assign({},loc,{notifMatin:e.target.value}));}}/></label>
+            <label style={lbl}>Rappel soir<input type="time" style={iS} value={loc.notifSoir||""} onChange={function(e){setLoc(Object.assign({},loc,{notifSoir:e.target.value}));}}/></label>
             <div style={{display:"flex",gap:8}}>
-              <button style={{...S.saveBtn,fontSize:13}} onClick={()=>{updateSettings(loc);showToast("Rappels enregistrés ✓");}}>Enregistrer</button>
-              <button style={{...expBtn(),fontSize:13,flex:1}} onClick={()=>new Notification("Badgeo",{body:"Test notification ✓"})}>Tester</button>
+              <button style={Object.assign({},expBtn(),{flex:1,fontSize:13})} onClick={function(){updateSettings(loc);showToast("Rappels enregistrés ✓");}}>Enregistrer</button>
+              <button style={Object.assign({},expBtn(),{flex:1,fontSize:13})} onClick={function(){new Notification("Badgeo",{body:"Test ✓"});}}>Tester</button>
             </div>
-          </>
+          </div>
         )}
       </div>
-
       <div style={sec}>
         <div style={ttl}>📤 Export</div>
         <button style={expBtn()} onClick={exportCSV}>Exporter CSV</button>
-        <button style={{...expBtn(),marginTop:8}} onClick={exportPDF}>Exporter / Imprimer PDF</button>
-        <button style={{...expBtn(dark?"#4ade80":"#16a34a"),marginTop:8}} onClick={exportJSON}>💾 Sauvegarder (JSON)</button>
+        <button style={Object.assign({},expBtn(),{marginTop:8})} onClick={exportPDF}>Exporter / Imprimer PDF</button>
+        <button style={Object.assign({},expBtn(dark?"#4ade80":"#16a34a"),{marginTop:8})} onClick={exportJSON}>💾 Sauvegarder (JSON)</button>
       </div>
       <div style={sec}>
         <div style={ttl}>📥 Import</div>
-        <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>importJSON(e.target.files[0])}/>
-        <button style={expBtn(dark?"#facc15":"#b45309")} onClick={()=>fileRef.current.click()}>📂 Restaurer depuis JSON</button>
+        <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={function(e){importJSON(e.target.files[0]);}}/>
+        <button style={expBtn(dark?"#facc15":"#b45309")} onClick={function(){fileRef.current.click();}}>📂 Restaurer depuis JSON</button>
         <div style={{fontSize:11,color:dark?"#666":"#aaa",marginTop:6}}>Remplace toutes les données actuelles.</div>
       </div>
       <div style={sec}>
         <div style={ttl}>⚠️ Danger</div>
-        <button style={S.dangerBtn} onClick={resetData}>Effacer toutes les données</button>
+        <button style={{width:"100%",background:"#2a1414",border:"1px solid #f87171",borderRadius:10,color:"#f87171",padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600}} onClick={resetData}>Effacer toutes les données</button>
       </div>
     </div>
   );
@@ -593,202 +559,192 @@ function VueSettings({settings,updateSettings,exportCSV,exportPDF,exportJSON,imp
 
 // ─── APP PRINCIPALE ──────────────────────────────────────────────────────────
 function Badgeo(){
-  const [view,setView]=useState("semaine");
-  const [cur,setCur]=useState(new Date());
-  const [data,setData]=useState({});
-  const [adjustments,setAdjustments]=useState({});
-  const [settings,setSettings]=useState({heuresHebdo:35,nom:"",firstDay:1,preset:"matinapm",singlePeriodDefault:false,theme:"dark",roundMin:0,notifMatin:"",notifSoir:"",paidBreak:false});
-  const [editDay,setEditDay]=useState(null);
-  const [toast,setToast]=useState(null);
-  const [flash,setFlash]=useState(null);
-  const [singleToday,setSingleToday]=useState(false);
+  var [view,setView]=useState("semaine");
+  var [cur,setCur]=useState(new Date());
+  var [data,setData]=useState({});
+  var [adjustments,setAdjustments]=useState({});
+  var [settings,setSettings]=useState({heuresHebdo:35,nom:"",firstDay:1,preset:"matinapm",singlePeriodDefault:false,theme:"dark",roundMin:0,notifMatin:"",notifSoir:"",paidBreak:false});
+  var [editDay,setEditDay]=useState(null);
+  var [toast,setToast]=useState(null);
+  var [flash,setFlash]=useState(null);
+  var [singleToday,setSingleToday]=useState(false);
 
-  useEffect(()=>{
+  useEffect(function(){
     try{
-      const d=localStorage.getItem("badgeo_data"),s=localStorage.getItem("badgeo_settings"),a=localStorage.getItem("badgeo_adj");
+      var d=localStorage.getItem("badgeo_data"),s=localStorage.getItem("badgeo_settings"),a=localStorage.getItem("badgeo_adj");
       if(d) setData(JSON.parse(d));
-      if(s) setSettings(p=>({...p,...JSON.parse(s)}));
+      if(s) setSettings(function(p){ return Object.assign({},p,JSON.parse(s)); });
       if(a) setAdjustments(JSON.parse(a));
-    }catch{}
+    }catch(e){}
   },[]);
 
-  useEffect(()=>{
+  useEffect(function(){
     document.body.style.background=settings.theme==="light"?"#f4f4f8":"#0c0c14";
     document.body.style.color=settings.theme==="light"?"#1a1a2e":"#e8e6f0";
-    document.body.className=settings.theme==="light"?"light":"";
   },[settings.theme]);
 
-  useEffect(()=>{
-    if(typeof Notification==="undefined"||Notification.permission!=="granted") return;
-    const check=()=>{
-      const now=new Date(),hhmm=`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
-      const e=data[dk(now)]||{};
-      if(settings.notifMatin&&hhmm===settings.notifMatin&&!e.matin_debut) new Notification("Badgeo",{body:"N'oublie pas de pointer ton arrivée ! 🌅"});
-      if(settings.notifSoir&&hhmm===settings.notifSoir){
-        const useSingle=settings.singlePeriodDefault||e.singlePeriod;
-        if(!e[useSingle?"matin_fin":"soir_fin"]) new Notification("Badgeo",{body:"N'oublie pas de pointer ton départ ! 🌙"});
-      }
-    };
-    const id=setInterval(check,30000); return ()=>clearInterval(id);
-  },[settings.notifMatin,settings.notifSoir,data,settings.singlePeriodDefault]);
-
-  const saveAll=useCallback((nd,ns,na)=>{
+  var saveAll=useCallback(function(nd,ns,na){
     try{
       localStorage.setItem("badgeo_data",JSON.stringify(nd));
       localStorage.setItem("badgeo_settings",JSON.stringify(ns));
       localStorage.setItem("badgeo_adj",JSON.stringify(na));
-    }catch{}
+    }catch(e){}
   },[]);
 
-  const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(null),2500);};
-  const handleSaveDay=useCallback((dkk,val)=>{setData(p=>{const nd={...p,[dkk]:val};saveAll(nd,settings,adjustments);return nd;});showToast("Enregistré ✓");},[settings,adjustments,saveAll]);
-  const handleDelDay=useCallback((dkk)=>{setData(p=>{const nd={...p};delete nd[dkk];saveAll(nd,settings,adjustments);return nd;});showToast("Supprimé");},[settings,adjustments,saveAll]);
-  const updateSettings=useCallback(s=>{setSettings(s);saveAll(data,s,adjustments);},[data,adjustments,saveAll]);
-  const setCurAndView=(d,v)=>{setCur(d);setView(v);};
+  function showToast(msg){ setToast(msg); setTimeout(function(){setToast(null);},2500); }
 
-  // ─── Pointage principal ────────────────────────────────────────────────────
-  const handlePointage=()=>{
-    const now=new Date(),h=now.getHours(),m=now.getMinutes();
-    let tgt=new Date(now),apres=false;
-    if(h<6){tgt.setDate(tgt.getDate()-1);apres=true;}
-    const dkk=dk(tgt),ex=data[dkk]||{};
-    if(ex.special){showToast("Jour Repos/Férié");return;}
-    const useSingle=singleToday||settings.singlePeriodDefault||ex.singlePeriod;
-    const idx=nextMainIdx(ex,useSingle);
-    if(idx===-1){showToast("Journée complète — ouvre le jour pour corriger");return;}
-    const crs=getMainCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
-    const cr=crs[idx];
-    const tot=rnd(h*60+m,settings.roundMin||0);
-    let hh=Math.floor(tot/60),mm=tot%60;
+  var handleSaveDay=useCallback(function(dkk,val){
+    setData(function(p){ var nd=Object.assign({},p,{[dkk]:val}); saveAll(nd,settings,adjustments); return nd; });
+    showToast("Enregistré ✓");
+  },[settings,adjustments,saveAll]);
+
+  var handleDelDay=useCallback(function(dkk){
+    setData(function(p){ var nd=Object.assign({},p); delete nd[dkk]; saveAll(nd,settings,adjustments); return nd; });
+    showToast("Supprimé");
+  },[settings,adjustments,saveAll]);
+
+  var updateSettings=useCallback(function(s){ setSettings(s); saveAll(data,s,adjustments); },[data,adjustments,saveAll]);
+  function setCurAndView(d,v){ setCur(d); setView(v); }
+
+  function handlePointage(){
+    var now=new Date(),h=now.getHours(),m=now.getMinutes();
+    var tgt=new Date(now),apres=false;
+    if(h<6){ tgt.setDate(tgt.getDate()-1); apres=true; }
+    var dkk=dk(tgt),ex=data[dkk]||{};
+    if(ex.special){ showToast("Jour Repos/Férié"); return; }
+    var useSingle=singleToday||settings.singlePeriodDefault||ex.singlePeriod;
+    var idx=nextMainIdx(ex,useSingle);
+    if(idx===-1){ showToast("Journée complète — ouvre le jour pour corriger"); return; }
+    var crs=getMainCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
+    var cr=crs[idx];
+    var tot=rnd(h*60+m,settings.roundMin||0);
+    var hh=Math.floor(tot/60),mm=tot%60;
     if(apres) hh+=24;
-    const heureStr=`${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
-    const nd={...ex,[cr.field]:heureStr};
+    var heureStr=String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0");
+    var nd=Object.assign({},ex,{[cr.field]:heureStr});
     if(useSingle&&!ex.singlePeriod) nd.singlePeriod=true;
     handleSaveDay(dkk,nd);
-    const dH=apres?`${String(hh-24).padStart(2,"0")}:${String(mm).padStart(2,"0")} †`:heureStr;
-    setFlash({label:cr.label,heure:dH,dkk,icon:cr.icon,color:cr.color});
-    setTimeout(()=>setFlash(null),4000);
-  };
+    var dHstr=apres?String(hh-24).padStart(2,"0")+":"+String(mm).padStart(2,"0")+" †":heureStr;
+    setFlash({label:cr.label,heure:dHstr,dkk:dkk,icon:cr.icon,color:cr.color});
+    setTimeout(function(){setFlash(null);},4000);
+  }
 
-  // ─── Pointage pause ────────────────────────────────────────────────────────
-  const handlePause=()=>{
-    const now=new Date(),h=now.getHours(),m=now.getMinutes();
-    let tgt=new Date(now);
+  function handlePause(){
+    var now=new Date(),h=now.getHours(),m=now.getMinutes();
+    var tgt=new Date(now);
     if(h<6) tgt.setDate(tgt.getDate()-1);
-    const dkk=dk(tgt),ex=data[dkk]||{};
-    if(ex.special){showToast("Jour Repos/Férié");return;}
-    const pIdx=nextPauseIdx(ex);
-    if(!pIdx){showToast("Pause déjà complète — ouvre le jour pour corriger");return;}
-    const tot=rnd(h*60+m,settings.roundMin||0);
-    const hh=Math.floor(tot/60),mm=tot%60;
-    const heureStr=`${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
-    handleSaveDay(dkk,{...ex,[`pause_${pIdx}`]:heureStr});
-    const icon=pIdx==="debut"?"☕":"▶️";
-    const label=pIdx==="debut"?"Départ pause":"Retour pause";
-    const color=pIdx==="debut"?"#fb923c":"#a3e635";
-    setFlash({label,heure:heureStr,dkk,icon,color});
-    setTimeout(()=>setFlash(null),4000);
-  };
+    var dkk=dk(tgt),ex=data[dkk]||{};
+    if(ex.special){ showToast("Jour Repos/Férié"); return; }
+    var pIdx=nextPauseIdx(ex);
+    if(!pIdx){ showToast("Pause déjà complète"); return; }
+    var tot=rnd(h*60+m,settings.roundMin||0);
+    var hh=Math.floor(tot/60),mm=tot%60;
+    var heureStr=String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0");
+    handleSaveDay(dkk,Object.assign({},ex,{["pause_"+pIdx]:heureStr}));
+    setFlash({label:pIdx==="debut"?"Départ pause":"Retour pause",heure:heureStr,dkk:dkk,icon:pIdx==="debut"?"☕":"▶️",color:pIdx==="debut"?"#fb923c":"#a3e635"});
+    setTimeout(function(){setFlash(null);},4000);
+  }
 
-  // ─── Exports ───────────────────────────────────────────────────────────────
-  const exportCSV=()=>{
-    const labels=PRESETS[settings.preset]||PRESETS.matinapm;
-    const rows=[[`Date`,`Jour`,`Type`,`Arr. ${labels.p1}`,`Dép. ${labels.p1}`,`Dép. pause`,`Ret. pause`,`Pause`,`Arr. ${labels.p2}`,`Dép. ${labels.p2}`,`Total net (h)`]];
-    for(const k of Object.keys(data).sort()){
-      const v=data[k],d=pk(k),j=JOURS_FULL[(d.getDay()+6)%7];
+  function exportCSV(){
+    var labels=PRESETS[settings.preset]||PRESETS.matinapm;
+    var rows=[["Date","Jour","Type","Arr. "+labels.p1,"Dép. "+labels.p1,"Dép. pause","Ret. pause","Pause","Arr. "+labels.p2,"Dép. "+labels.p2,"Total net (h)"]];
+    var keys=Object.keys(data).sort();
+    for(var i=0;i<keys.length;i++){
+      var k=keys[i],v=data[k],d=pk(k),j=JOURS_FULL[(d.getDay()+6)%7];
       if(v.special) rows.push([k,j,TYPE_SPECIAL[v.special]||v.special,"","","","","","","","0"]);
       else rows.push([k,j,"Travail",dH(v.matin_debut),dH(v.matin_fin),dH(v.pause_debut),dH(v.pause_fin),settings.paidBreak?"payée":(calcPauses(v)/60).toFixed(2)+"h",v.singlePeriod?"(période unique)":dH(v.soir_debut),v.singlePeriod?"":dH(v.soir_fin),(calcJour(v,settings.paidBreak)/60).toFixed(2)]);
     }
-    const blob=new Blob(["\uFEFF"+rows.map(r=>r.join(";")).join("\n")],{type:"text/csv;charset=utf-8;"});
-    const url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download="badgeo.csv"; a.click(); URL.revokeObjectURL(url);
+    var blob=new Blob(["\uFEFF"+rows.map(function(r){return r.join(";");}).join("\n")],{type:"text/csv;charset=utf-8;"});
+    var url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download="badgeo.csv"; a.click(); URL.revokeObjectURL(url);
     showToast("Export CSV ✓");
-  };
+  }
 
-  const exportJSON=()=>{
-    const payload={version:4,exportDate:new Date().toISOString(),data,settings,adjustments};
-    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download=`badgeo-backup-${dk(new Date())}.json`; a.click(); URL.revokeObjectURL(url);
+  function exportJSON(){
+    var payload={version:4,exportDate:new Date().toISOString(),data:data,settings:settings,adjustments:adjustments};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(blob),a=document.createElement("a"); a.href=url; a.download="badgeo-backup-"+dk(new Date())+".json"; a.click(); URL.revokeObjectURL(url);
     showToast("Sauvegarde JSON ✓");
-  };
+  }
 
-  const importJSON=file=>{
+  function importJSON(file){
     if(!file) return;
-    const reader=new FileReader();
-    reader.onload=e=>{
+    var reader=new FileReader();
+    reader.onload=function(e){
       try{
-        const p=JSON.parse(e.target.result);
+        var p=JSON.parse(e.target.result);
         if(!p.data) throw new Error();
         if(window.confirm("Remplacer toutes les données actuelles ?")){
-          const ns=p.settings?{...settings,...p.settings}:settings;
-          const na=p.adjustments||{};
-          setData(p.data);setSettings(ns);setAdjustments(na);saveAll(p.data,ns,na);
+          var ns=p.settings?Object.assign({},settings,p.settings):settings;
+          var na=p.adjustments||{};
+          setData(p.data); setSettings(ns); setAdjustments(na); saveAll(p.data,ns,na);
           showToast("Données restaurées ✓");
         }
-      }catch{showToast("Fichier JSON invalide ✗");}
+      }catch(err){ showToast("Fichier JSON invalide ✗"); }
     };
     reader.readAsText(file);
-  };
+  }
 
-  const exportPDF=()=>{
-    const labels=PRESETS[settings.preset]||PRESETS.matinapm;
-    const sorted=Object.keys(data).sort(),semaines={};
-    for(const k of sorted){const ws=dk(wkStart(pk(k),settings.firstDay));if(!semaines[ws])semaines[ws]=[];semaines[ws].push(k);}
-    let html=`<html><head><meta charset="utf-8"><title>Badgeo</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:6px}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}th{background:#f5f5f5}.pos{color:green}.neg{color:red}.pause{color:#f97316}</style></head><body><h1>Badgeo${settings.nom?" — "+settings.nom:""}</h1><p>Forfait : <b>${settings.heuresHebdo}h/semaine</b> — Pause : <b>${settings.paidBreak?"Payée":"Déduite"}</b></p>`;
-    for(const [wk,keys] of Object.entries(semaines).sort()){
-      const ws=pk(wk),we=new Date(ws);we.setDate(ws.getDate()+6);
-      const tot=keys.reduce((a,k)=>a+calcJour(data[k],settings.paidBreak),0),solde=tot-settings.heuresHebdo*60;
-      html+=`<h2>Semaine ${ws.getDate()} ${MOIS[ws.getMonth()].slice(0,3)} – ${we.getDate()} ${MOIS[we.getMonth()].slice(0,3)} ${we.getFullYear()}</h2><table><tr><th>Date</th><th>Jour</th><th>${labels.p1}</th><th>Pause</th><th>${labels.p2}</th><th>Total net</th></tr>`;
-      for(const k of keys){
-        const v=data[k],d=pk(k),j=JOURS_FULL[(d.getDay()+6)%7];
-        if(v.special) html+=`<tr><td>${k}</td><td>${j}</td><td colspan="4" style="color:#888;font-style:italic">${TYPE_SPECIAL[v.special]||v.special}</td></tr>`;
+  function exportPDF(){
+    var labels=PRESETS[settings.preset]||PRESETS.matinapm;
+    var sorted=Object.keys(data).sort(),semaines={};
+    for(var i=0;i<sorted.length;i++){
+      var ws=dk(wkStart(pk(sorted[i]),Number(settings.firstDay)||1));
+      if(!semaines[ws]) semaines[ws]=[];
+      semaines[ws].push(sorted[i]);
+    }
+    var html="<html><head><meta charset='utf-8'><title>Badgeo</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h1{font-size:18px}h2{font-size:13px;margin-top:18px;border-bottom:1px solid #ccc;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:6px}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left}th{background:#f5f5f5}.pos{color:green}.neg{color:red}.pause{color:#f97316}</style></head><body><h1>Badgeo"+(settings.nom?" — "+settings.nom:"")+"</h1><p>Forfait : <b>"+settings.heuresHebdo+"h/semaine</b></p>";
+    var wsKeys=Object.keys(semaines).sort();
+    for(var wi=0;wi<wsKeys.length;wi++){
+      var wk=wsKeys[wi],wkeys=semaines[wk];
+      var wsd=pk(wk),wed=new Date(wsd); wed.setDate(wsd.getDate()+6);
+      var tot=0; for(var ki=0;ki<wkeys.length;ki++) tot+=calcJour(data[wkeys[ki]],settings.paidBreak);
+      var solde=tot-settings.heuresHebdo*60;
+      html+="<h2>Semaine "+wsd.getDate()+" "+MOIS[wsd.getMonth()].slice(0,3)+" – "+wed.getDate()+" "+MOIS[wed.getMonth()].slice(0,3)+" "+wed.getFullYear()+"</h2><table><tr><th>Date</th><th>Jour</th><th>"+labels.p1+"</th><th>Pause</th><th>"+labels.p2+"</th><th>Total net</th></tr>";
+      for(var ri=0;ri<wkeys.length;ri++){
+        var rk=wkeys[ri],rv=data[rk],rd=pk(rk),rj=JOURS_FULL[(rd.getDay()+6)%7];
+        if(rv.special) html+="<tr><td>"+rk+"</td><td>"+rj+"</td><td colspan='4' style='color:#888;font-style:italic'>"+(TYPE_SPECIAL[rv.special]||rv.special)+"</td></tr>";
         else{
-          const mat=(v.matin_debut||v.matin_fin)?`${dH(v.matin_debut)}→${dH(v.matin_fin)}`:"—";
-          const pause=(v.pause_debut||v.pause_fin)?`${dH(v.pause_debut)}→${dH(v.pause_fin)} (${m2h(calcPauses(v))}${settings.paidBreak?" payée":""})`:"—";
-          const soi=v.singlePeriod?"(période unique)":(v.soir_debut||v.soir_fin)?`${dH(v.soir_debut)}→${dH(v.soir_fin)}`:"—";
-          html+=`<tr><td>${k}</td><td>${j}</td><td>${mat}</td><td class="pause">${pause}</td><td>${soi}</td><td>${m2h(calcJour(v,settings.paidBreak))}</td></tr>`;
+          var mat=(rv.matin_debut||rv.matin_fin)?dH(rv.matin_debut)+"→"+dH(rv.matin_fin):"—";
+          var pau=(rv.pause_debut||rv.pause_fin)?dH(rv.pause_debut)+"→"+dH(rv.pause_fin)+" ("+m2h(calcPauses(rv))+(settings.paidBreak?" payée":"")+")":" —";
+          var soi=rv.singlePeriod?"(période unique)":(rv.soir_debut||rv.soir_fin)?dH(rv.soir_debut)+"→"+dH(rv.soir_fin):"—";
+          html+="<tr><td>"+rk+"</td><td>"+rj+"</td><td>"+mat+"</td><td class='pause'>"+pau+"</td><td>"+soi+"</td><td>"+m2h(calcJour(rv,settings.paidBreak))+"</td></tr>";
         }
       }
-      html+=`<tr><td colspan="5"><b>Total semaine</b></td><td><b>${m2h(tot)}</b> <span class="${solde>=0?"pos":"neg"}">(${solde>=0?"+":""}${m2h(solde)})</span></td></tr></table>`;
+      html+="<tr><td colspan='5'><b>Total semaine</b></td><td><b>"+m2h(tot)+"</b> <span class='"+(solde>=0?"pos":"neg")+"'>("+(solde>=0?"+":"")+m2h(solde)+")</span></td></tr></table>";
     }
     html+="</body></html>";
-    const w=window.open("","_blank");w.document.write(html);w.document.close();w.print();
+    var w=window.open("","_blank"); w.document.write(html); w.document.close(); w.print();
     showToast("PDF ✓");
-  };
+  }
 
-  const resetData=()=>{if(window.confirm("Supprimer toutes les données ?")){setData({});setAdjustments({});saveAll({},settings,{});showToast("Données effacées");}};
+  function resetData(){ if(window.confirm("Supprimer toutes les données ?")){ setData({}); setAdjustments({}); saveAll({},settings,{}); showToast("Données effacées"); } }
 
-  const dark=settings.theme!=="light";
-  const today=new Date(),todayEntry=data[dk(today)]||{};
-  const useSingle=singleToday||settings.singlePeriodDefault||todayEntry.singlePeriod;
-  const nextIdx=nextMainIdx(todayEntry,useSingle);
-  const crs=getMainCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
-  const nextCreneau=nextIdx>=0?crs[nextIdx]:null;
-  const pIdx=nextPauseIdx(todayEntry);
-  const pauseLabel=pIdx==="debut"?"Départ pause":pIdx==="fin"?"Retour pause":null;
-  const pauseIcon=pIdx==="debut"?"☕":pIdx==="fin"?"▶️":null;
+  var dark=settings.theme!=="light";
+  var today=new Date(),todayEntry=data[dk(today)]||{};
+  var useSingle=singleToday||settings.singlePeriodDefault||todayEntry.singlePeriod;
+  var nextIdx=nextMainIdx(todayEntry,useSingle);
+  var crs=getMainCreneaux(PRESETS[settings.preset]||PRESETS.matinapm,useSingle);
+  var nextCreneau=nextIdx>=0?crs[nextIdx]:null;
+  var pIdx=nextPauseIdx(todayEntry);
 
   return (
-    <div style={{...S.app,background:dark?"#0c0c14":"#f4f4f8",color:dark?"#e8e6f0":"#1a1a2e"}}>
-      {/* Header */}
-      <div style={{...S.header,borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
-        <div style={S.headerLeft}>
-          <div style={S.logo}>⏱</div>
+    <div style={{fontFamily:"'DM Sans','Segoe UI',sans-serif",minHeight:"100vh",display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto",background:dark?"#0c0c14":"#f4f4f8",color:dark?"#e8e6f0":"#1a1a2e"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 20px 12px",borderBottom:"1px solid "+(dark?"#1a1a28":"#e0e0ec")}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:26}}>⏱</div>
           <div>
-            <div style={{...S.appTitle,color:dark?"#f0eeff":"#1a1a2e"}}>Badgeo</div>
+            <div style={{fontSize:19,fontWeight:700,letterSpacing:"-0.5px",fontStyle:"italic",color:dark?"#f0eeff":"#1a1a2e"}}>Badgeo</div>
             {settings.nom&&<div style={{fontSize:12,color:dark?"#8b86aa":"#999"}}>{settings.nom}</div>}
           </div>
         </div>
-        <button style={{...S.settingsIconBtn,color:dark?"#8b86aa":"#aaa"}} onClick={()=>setView(v=>v==="settings"?"semaine":"settings")}>{view==="settings"?"✕":"☰"}</button>
+        <button style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:dark?"#8b86aa":"#aaa"}} onClick={function(){setView(function(v){return v==="settings"?"semaine":"settings";});}}>{view==="settings"?"✕":"☰"}</button>
       </div>
 
-      {/* Zone pointage */}
       {view!=="settings"&&(
-        <div style={{...S.pointageZone,borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
-          {/* Ligne principale */}
+        <div style={{padding:"10px 14px 10px",borderBottom:"1px solid "+(dark?"#1a1a28":"#e0e0ec")}}>
           <div style={{display:"flex",gap:8,alignItems:"stretch",marginBottom:pIdx?8:0}}>
             {nextCreneau?(
-              <button onClick={handlePointage}
-                style={{...S.pointageBtn,flex:1,background:dark?"linear-gradient(135deg,#1a1832,#211e3a)":"linear-gradient(135deg,#f0eeff,#e8e4ff)",border:`1.5px solid ${dark?"#3a3260":"#c4b8ff"}`}}>
+              <button onClick={handlePointage} style={{flex:1,background:dark?"linear-gradient(135deg,#1a1832,#211e3a)":"linear-gradient(135deg,#f0eeff,#e8e4ff)",border:"1.5px solid "+(dark?"#3a3260":"#c4b8ff"),borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
                 <span style={{fontSize:26}}>{nextCreneau.icon}</span>
                 <div style={{textAlign:"left"}}>
                   <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:1,color:dark?"#8b86aa":"#aaa"}}>Pointer maintenant</div>
@@ -797,23 +753,17 @@ function Badgeo(){
                 <div style={{marginLeft:"auto",color:dark?"#3a3260":"#c4b8ff",fontSize:20}}>→</div>
               </button>
             ):(
-              <div style={{...S.pointageDone,flex:1}}>✓ Journée complète</div>
+              <div style={{flex:1,textAlign:"center",color:"#4ade80",fontWeight:700,padding:"14px",fontSize:15}}>✓ Journée complète</div>
             )}
-            {/* Bouton période unique ⏳ */}
-            <button onClick={()=>setSingleToday(v=>!v)} title="Journée en une seule période"
-              style={{background:dark?(singleToday?"#221e38":"#16162a"):(singleToday?"#ede9ff":"#f0f0f8"),border:`1.5px solid ${singleToday?"#c4b8ff":dark?"#2a2a3a":"#ddd"}`,borderRadius:12,padding:"0 13px",cursor:"pointer",fontSize:20,color:singleToday?"#c4b8ff":dark?"#3a3260":"#ccc",flexShrink:0}}>
-              ⏳
-            </button>
+            <button onClick={function(){setSingleToday(function(v){return !v;});}} title="Journée en une seule période"
+              style={{background:dark?(singleToday?"#221e38":"#16162a"):(singleToday?"#ede9ff":"#f0f0f8"),border:"1.5px solid "+(singleToday?"#c4b8ff":(dark?"#2a2a3a":"#ddd")),borderRadius:12,padding:"0 13px",cursor:"pointer",fontSize:20,color:singleToday?"#c4b8ff":(dark?"#3a3260":"#ccc"),flexShrink:0}}>⏳</button>
           </div>
-
-          {/* Bouton pause (si pas complète) */}
           {pIdx&&(
-            <button onClick={handlePause}
-              style={{width:"100%",background:dark?"#1a1a28":"#fff8f0",border:`1.5px solid ${dark?"#2a2040":"#fde8d0"}`,borderRadius:12,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
-              <span style={{fontSize:22}}>{pauseIcon}</span>
+            <button onClick={handlePause} style={{width:"100%",background:dark?"#1a1a28":"#fff8f0",border:"1.5px solid "+(dark?"#2a2040":"#fde8d0"),borderRadius:12,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}>
+              <span style={{fontSize:22}}>{pIdx==="debut"?"☕":"▶️"}</span>
               <div style={{textAlign:"left"}}>
                 <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:1,color:dark?"#8b86aa":"#aaa"}}>Pointer maintenant</div>
-                <div style={{fontSize:14,fontWeight:700,marginTop:1,color:"#fb923c"}}>{pauseLabel}</div>
+                <div style={{fontSize:14,fontWeight:700,marginTop:1,color:"#fb923c"}}>{pIdx==="debut"?"Départ pause":"Retour pause"}</div>
               </div>
               <div style={{marginLeft:"auto",color:dark?"#2a2040":"#fde8d0",fontSize:20}}>→</div>
             </button>
@@ -822,86 +772,37 @@ function Badgeo(){
         </div>
       )}
 
-      {/* Flash */}
       {flash&&(
-        <div style={{margin:"10px 14px 0",borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,background:dark?"#161628":"#f0eeff",border:`1.5px solid ${dark?"#3a3260":"#c4b8ff"}`}}>
+        <div style={{margin:"10px 14px 0",borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,background:dark?"#161628":"#f0eeff",border:"1.5px solid "+(dark?"#3a3260":"#c4b8ff")}}>
           <span style={{fontSize:26}}>{flash.icon}</span>
           <div style={{flex:1}}>
             <div style={{fontSize:11,color:dark?"#8b86aa":"#aaa",fontWeight:700,textTransform:"uppercase",letterSpacing:.5}}>{flash.label}</div>
             <div style={{fontSize:30,fontWeight:800,color:dark?"#f0eeff":"#1a1a2e",lineHeight:1.1}}>{flash.heure}</div>
-            {flash.heure.includes("†")&&<div style={{fontSize:10,color:"#facc15"}}>Rattaché à la veille</div>}
           </div>
-          <button style={{background:"none",border:`1px solid ${dark?"#3a3260":"#c4b8ff"}`,borderRadius:8,color:dark?"#8b86aa":"#888",padding:"6px 10px",fontSize:12,cursor:"pointer"}} onClick={()=>{setEditDay(flash.dkk);setFlash(null);}}>Corriger</button>
+          <button style={{background:"none",border:"1px solid "+(dark?"#3a3260":"#c4b8ff"),borderRadius:8,color:dark?"#8b86aa":"#888",padding:"6px 10px",fontSize:12,cursor:"pointer"}} onClick={function(){setEditDay(flash.dkk);setFlash(null);}}>Corriger</button>
         </div>
       )}
 
-      {/* Tabs */}
       {view!=="settings"&&(
-        <div style={{display:"flex",borderBottom:`1px solid ${dark?"#1a1a28":"#e0e0ec"}`}}>
-          {[["semaine","Semaine"],["mois","Mois"],["annee","Année"]].map(([k,l])=>(
-            <button key={k} style={{flex:1,background:"none",border:"none",padding:"11px 0",fontSize:14,cursor:"pointer",fontWeight:500,color:view===k?"#c4b8ff":(dark?"#8b86aa":"#aaa"),borderBottom:`2px solid ${view===k?"#c4b8ff":"transparent"}`}} onClick={()=>setView(k)}>{l}</button>
-          ))}
+        <div style={{display:"flex",borderBottom:"1px solid "+(dark?"#1a1a28":"#e0e0ec")}}>
+          {[["semaine","Semaine"],["mois","Mois"],["annee","Année"]].map(function(kl){
+            return <button key={kl[0]} style={{flex:1,background:"none",border:"none",padding:"11px 0",fontSize:14,cursor:"pointer",fontWeight:500,color:view===kl[0]?"#c4b8ff":(dark?"#8b86aa":"#aaa"),borderBottom:"2px solid "+(view===kl[0]?"#c4b8ff":"transparent")}} onClick={function(){setView(kl[0]);}}>{kl[1]}</button>;
+          })}
         </div>
       )}
 
-      <div style={S.body}>
+      <div style={{flex:1,overflowY:"auto",paddingBottom:24}}>
         {view==="semaine"&&<VueSemaine cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay}/>}
         {view==="mois"&&<SafeView name="Mois"><VueMois cur={cur} setCur={setCur} data={data} settings={settings} setEdit={setEditDay} adjustments={adjustments} setAdjustments={setAdjustments} saveAll={saveAll}/></SafeView>}
         {view==="annee"&&<SafeView name="Année"><VueAnnee cur={cur} setCur={setCur} data={data} settings={settings} setCurAndView={setCurAndView} adjustments={adjustments}/></SafeView>}
         {view==="settings"&&<VueSettings settings={settings} updateSettings={updateSettings} exportCSV={exportCSV} exportPDF={exportPDF} exportJSON={exportJSON} importJSON={importJSON} resetData={resetData} showToast={showToast}/>}
       </div>
 
-      {editDay&&<DayEditor dkey={editDay} data={data} settings={settings} onSave={handleSaveDay} onDelete={handleDelDay} onClose={()=>setEditDay(null)}/>}
+      {editDay&&<DayEditor dkey={editDay} data={data} settings={settings} onSave={handleSaveDay} onDelete={handleDelDay} onClose={function(){setEditDay(null);}}/>}
       {toast&&<div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:dark?"#2a2a3a":"#1a1a2e",color:"#c4b8ff",padding:"9px 18px",borderRadius:20,fontSize:13,fontWeight:600,zIndex:200,whiteSpace:"nowrap"}}>{toast}</div>}
     </div>
   );
 }
-
-// ─── STYLES DE BASE ──────────────────────────────────────────────────────────
-const S={
-  app:{fontFamily:"'DM Sans','Segoe UI',sans-serif",minHeight:"100vh",display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto"},
-  header:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 20px 12px"},
-  headerLeft:{display:"flex",alignItems:"center",gap:10},
-  logo:{fontSize:26},
-  appTitle:{fontSize:19,fontWeight:700,letterSpacing:"-0.5px",fontStyle:"italic"},
-  settingsIconBtn:{background:"none",border:"none",fontSize:22,cursor:"pointer"},
-  pointageZone:{padding:"10px 14px 10px"},
-  pointageBtn:{borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"},
-  pointageDone:{textAlign:"center",color:"#4ade80",fontWeight:700,padding:"14px",fontSize:15},
-  body:{flex:1,overflowY:"auto",paddingBottom:24},
-  viewContainer:{padding:"14px 14px 0"},
-  navRow:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14},
-  navBtn:{border:"none",width:34,height:34,borderRadius:8,fontSize:20,cursor:"pointer"},
-  navTitle:{fontSize:14,fontWeight:600},
-  daysGrid:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5,marginBottom:14},
-  dayCard:{borderRadius:10,padding:"9px 3px",textAlign:"center",cursor:"pointer"},
-  dayHours:{fontSize:9,color:"#c4b8ff",marginTop:3,fontWeight:700},
-  specialTag:{fontSize:9,color:"#f59e42",marginTop:3,fontWeight:700},
-  calGrid:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:14},
-  calCell:{borderRadius:7,padding:"5px 3px",textAlign:"center",cursor:"pointer",minHeight:44},
-  moisGrid:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:14},
-  moisCard:{borderRadius:10,padding:"11px 6px",textAlign:"center",cursor:"pointer"},
-  summaryCard:{borderRadius:12,padding:"12px 14px",marginBottom:10},
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:100,display:"flex",alignItems:"flex-end"},
-  modal:{borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"18px 18px 32px",maxHeight:"92vh",overflowY:"auto"},
-  modalHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14},
-  closeBtn:{background:"none",border:"none",fontSize:20,cursor:"pointer"},
-  specialRow:{display:"flex",gap:8,marginBottom:12},
-  specialBtn:{flex:1,borderRadius:10,padding:"10px",fontSize:14,cursor:"pointer",fontWeight:600},
-  creneauGroup:{borderRadius:12,padding:"12px"},
-  creneauGroupTitle:{fontSize:11,fontWeight:700,marginBottom:8,textTransform:"uppercase"},
-  lbl:{display:"flex",flexDirection:"column",gap:3,fontSize:11,fontWeight:600,marginBottom:8},
-  tInput:{borderRadius:8,padding:"7px 10px",fontSize:13,width:"100%",boxSizing:"border-box"},
-  modalFooter:{display:"flex",gap:8,marginTop:14},
-  saveBtn:{flex:1,background:"#c4b8ff",color:"#0c0c14",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer"},
-  deleteBtn:{background:"#2a1414",border:"1px solid #f87171",color:"#f87171",borderRadius:12,padding:"13px 14px",fontSize:14,cursor:"pointer",fontWeight:600},
-  settingsSection:{borderRadius:12,padding:"14px",marginBottom:10},
-  settingsTitle:{fontSize:14,fontWeight:700,marginBottom:12},
-  settingsLabel:{display:"flex",flexDirection:"column",gap:5,fontSize:13,fontWeight:600,marginBottom:12},
-  tInput2:{borderRadius:8,padding:"9px 11px",fontSize:14},
-  exportBtn:{width:"100%",borderRadius:10,padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600},
-  dangerBtn:{width:"100%",background:"#2a1414",border:"1px solid #f87171",borderRadius:10,color:"#f87171",padding:"11px",fontSize:14,cursor:"pointer",fontWeight:600},
-};
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Badgeo/>);
 </script>
